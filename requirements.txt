@@ -1,0 +1,6 @@
+numpy>=1.26
+absl-py
+einops
+einshape
+flax
+tensorflow-cpu
