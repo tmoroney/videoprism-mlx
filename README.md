@@ -1,6 +1,6 @@
 # VideoPrism: A Foundational Visual Encoder for Video Understanding
 
-[![Paper](https://img.shields.io/badge/arXiv-Paper-red.svg)](https://arxiv.org/abs/2402.13217)
+[![Paper](https://img.shields.io/badge/arXiv-2402.13217-red.svg)](https://arxiv.org/abs/2402.13217)
 [![Blog](https://img.shields.io/badge/Google_Research-Blog-green.svg)](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -18,6 +18,17 @@ public video understanding benchmarks using a single frozen model.
 
 This repository releases the model weight checkpoints and hosts [JAX](https://github.com/jax-ml/jax)/[Flax](https://github.com/google/flax) utility
 functions for checkpoint loading and model inference.
+
+## Updates
+
+* **[Jun-03-25]:** VideoPrism video encoders (ViT-B and ViT-L) are released. [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)] :fire::fire:
+
+## TODOs
+
+- [ ] Add colab notebook for demo.
+- [ ] Release text encoders for cross-modal retrieval.
+- [ ] Release models on Hugging Face.
+- [ ] Add PyTorch model support.
 
 ## Getting started
 
@@ -88,7 +99,8 @@ pre-training image-text data we used subject to data policy.
 
 If you use VideoPrism, please cite the following papers:
 
-```
+<!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
+```bibtex
 @inproceedings{zhao2024videoprism,
   title = {{VideoPrism}: A Foundational Visual Encoder for Video Understanding},
   author = {Long Zhao and Nitesh B. Gundavarapu and Liangzhe Yuan and Hao Zhou and Shen Yan and Jennifer J. Sun and Luke Friedman and Rui Qian and Tobias Weyand and Yue Zhao and Rachel Hornung and Florian Schroff and Ming-Hsuan Yang and David A. Ross and Huisheng Wang and Hartwig Adam and Mikhail Sirotenko and Ting Liu and Boqing Gong},
