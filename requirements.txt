@@ -3,4 +3,5 @@ absl-py
 einops
 einshape
 flax
+sentencepiece
 tensorflow-cpu
