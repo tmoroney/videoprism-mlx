@@ -67,10 +67,10 @@ outputs = forward_fn(model_inputs)  # Shape = [batch_size, num_tokens, feature_c
 
 We release the following model variants:
 
-| Model Name | Configuration Name | Model Type | Backbone | #Params | Checkpoint |
-| -------- | -------- | ------- | :-------: | :-------: | :-------: |
-| VideoPrism-B | `videoprism_public_v1_base`  | Video encoder | ViT-B | 114M | [link](https://storage.googleapis.com/videoprism/v1/flax_base_f16r288_repeated.npz) |
-| VideoPrism-L | `videoprism_public_v1_large` | Video encoder | ViT-L | 354M | [link](https://storage.googleapis.com/videoprism/v1/flax_large_f16r288_repeated.npz) |
+| Model Name | Configuration Name | Model Type | Backbone | #Params | File Size | Checkpoint |
+| -------- | -------- | ------- | :-------: | :-------: | :-------: | :-------: |
+| VideoPrism-B | `videoprism_public_v1_base`  | Video encoder | ViT-B | 114M | 458MB | [link](https://storage.googleapis.com/videoprism/v1/flax_base_f16r288_repeated.npz) |
+| VideoPrism-L | `videoprism_public_v1_large` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://storage.googleapis.com/videoprism/v1/flax_large_f16r288_repeated.npz) |
 
 The models take videos with shape `(num_frames, 288, 288, 3)` as inputs and
 outputs embeddings with shape `(num_frames * 16 * 16, feature_channels)` which
