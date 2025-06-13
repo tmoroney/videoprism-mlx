@@ -15,6 +15,7 @@
 """Layers for video encoders."""
 
 from collections.abc import Sequence
+import math
 
 import einops
 import einshape
@@ -145,6 +146,100 @@ def _interpolate_emb_2d(
   return target_emb
 
 
+class Embedding(nn.Module):
+  """A simple embedding layer that performs embedding lookups from ids.
+
+  Attributes:
+    num_classes: Number of tokens in the vocabulary.
+    input_dim: Depth of the embedding output. This is called `input_dim` as
+      opposed to the more appropriate `embedding_dim` to be compatible with
+      other embedding layers defined in this file.
+    lookup_style: Style of lookup, one of index or matmul.
+    scale_sqrt_depth: If set to True, activations are scaled with
+      sqrt(embedding_dim) in embeding lookup.
+    set_nan_for_oob_id: If set to True, embeddings corresponding to
+      out-of-boundaries ids will be set to NaN.
+  """
+
+  num_classes: int = 0
+  input_dim: int = 0
+  lookup_style: str = 'index'
+  scale_sqrt_depth: bool = False
+  set_nan_for_oob_id: bool = False
+
+  @nn.compact
+  def __call__(self, ids: Array) -> Array:
+    """Generates a jax.Array of embedding lookup result.
+
+    Args:
+      ids: Indexes of shape [...] for embedding lookup.
+
+    Returns:
+      A jax.Array of shape [..., input_dim].
+    """
+    emb_var = self.param(
+        'emb_var',
+        nn.initializers.normal(stddev=1.0 / math.sqrt(self.input_dim)),
+        [self.num_classes, self.input_dim],
+    )
+    if self.lookup_style == 'index':
+      embs = jnp.asarray(emb_var)[(ids,)]
+    elif self.lookup_style == 'matmul':
+      one_hot_ids = jax.nn.one_hot(ids, self.num_classes, dtype=jnp.float32)
+      embs = jnp.einsum('...y,yz->...z', one_hot_ids, emb_var)
+    else:
+      raise ValueError(f'Unknown lookup style: `{self.lookup_style}`.')
+
+    # Map out-of-boundary ids to NaN.
+    if self.set_nan_for_oob_id:
+      embs = jnp.where(ids[..., jnp.newaxis] < self.num_classes, embs, jnp.nan)
+
+    if self.scale_sqrt_depth:
+      embs *= self.input_dim**0.5
+
+    return embs
+
+
+class PositionalEmbedding(nn.Module):
+  """Generates position embedding for a given 1-d sequence.
+
+  Attributes:
+    embedding_dim: Dimension of the embedding to be generated.
+    min_timescale: Start of the geometric index.
+    max_timescale: End of the geometric index.
+  """
+
+  embedding_dim: int = 0
+  min_timescale: int = 1
+  max_timescale: int = 10_000
+
+  def __call__(self, seq_length: int) -> Array:
+    """Generates a jax.Array of embedding lookup result.
+
+    Args:
+      seq_length: Sequence length of the embeddings to be generated.
+
+    Returns:
+      A jax.Array of shape [1, seq_length, embedding_dim].
+    """
+    position = jnp.arange(seq_length, dtype=jnp.float32)[jnp.newaxis, :]
+    num_timescales = self.embedding_dim // 2
+    log_timescale_increment = math.log(
+        float(self.max_timescale) / float(self.min_timescale)
+    ) / jnp.maximum(jnp.asarray(num_timescales, dtype=jnp.float32) - 1, 1)
+    inv_timescales = self.min_timescale * jnp.exp(
+        jnp.arange(num_timescales, dtype=jnp.float32) * -log_timescale_increment
+    )
+    scaled_time = (
+        position[:, :, jnp.newaxis]
+        * inv_timescales[jnp.newaxis, jnp.newaxis, :]
+    )
+    embs = jnp.concatenate([jnp.sin(scaled_time), jnp.cos(scaled_time)], axis=2)
+    # Force usage of `np` to compute static values at trace time.
+    embs = jnp.pad(embs, [[0, 0], [0, 0], [0, np.mod(self.embedding_dim, 2)]])
+    return embs
+
+
 class TrainablePositionalEmbedding(nn.Module):
   """Generates trainable position embedding for a given 1-d sequence.
 
@@ -257,6 +352,7 @@ class VisionTransformer(nn.Module):
         norm_policy=self.norm_policy,
         internal_enable_per_dim_scale=False,
         activation_fn=layers.gelu,
+        enable_causal_atten=False,
         scan=self.scan,
     )(features, paddings, train=train)
     return features

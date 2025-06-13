@@ -873,6 +873,7 @@ class StackedTransformer(nn.Module):
       of attention logits with 1/sqrt(dim) factor.
     atten_logit_cap: Cap the absolute values of logits by tanh. Enabled when a
       positive value is specified. May not be supported by a subclass.
+    enable_causal_atten: Whether to enable causal attention.
     scan: Whether to use `nn.remat` and`nn.scan`.
   """
 
@@ -890,6 +891,7 @@ class StackedTransformer(nn.Module):
   activation_fn: ActivationFunc = nn.relu
   internal_enable_per_dim_scale: bool = True
   atten_logit_cap: float = 0.0
+  enable_causal_atten: bool = False
   scan: bool = False
 
   @nn.compact
@@ -910,7 +912,9 @@ class StackedTransformer(nn.Module):
       Output vector with shape [B, T, D].
     """
 
-    atten_mask = compute_attention_masks_for_fprop(inputs, paddings)
+    atten_mask = compute_attention_masks_for_fprop(
+        inputs, paddings, causal_attention=self.enable_causal_atten
+    )
 
     outputs = inputs
     if self.input_dropout_prob > 0.0:

@@ -26,6 +26,46 @@ from videoprism import encoders
 class EncodersTest(parameterized.TestCase):
 
   @chex.variants(with_jit=True, without_jit=True)
+  def test_embedding_layer(self):
+    num_classes, dim, input_shape = 8, 10, (5, 20)
+    npy_input = np.random.randint(0, num_classes, input_shape).astype('int32')
+    inputs = jnp.asarray(npy_input)
+    prng_key = jax.random.PRNGKey(seed=123)
+    emb_layer = encoders.Embedding(
+        name='emb_lookup',
+        num_classes=num_classes,
+        input_dim=dim,
+        scale_sqrt_depth=True,
+    )
+
+    @self.variant
+    def var_fn():
+      return emb_layer.init_with_output(prng_key, inputs)
+
+    outputs, params = var_fn()
+    self.assertLen(jax.tree_util.tree_flatten(params)[0], 1)
+    self.assertEqual(outputs.shape, input_shape + (dim,))
+
+  @chex.variants(with_jit=True, without_jit=True)
+  def test_positional_embedding_layer(self):
+    seq_len, dim = 8, 10
+    prng_key = jax.random.PRNGKey(seed=123)
+    emb_layer = encoders.PositionalEmbedding(
+        name='pos_emb',
+        embedding_dim=dim,
+        min_timescale=10,
+        max_timescale=20,
+    )
+
+    @self.variant
+    def var_fn():
+      return emb_layer.init_with_output(prng_key, seq_len)
+
+    outputs, params = var_fn()
+    self.assertEmpty(jax.tree_util.tree_flatten(params)[0])
+    self.assertEqual(outputs.shape, (1, seq_len, dim))
+
+  @chex.variants(with_jit=True, without_jit=True)
   def test_trainable_positional_embedding_layer(self):
     seq_len, dim = 8, 10
     prng_key = jax.random.PRNGKey(seed=123)
