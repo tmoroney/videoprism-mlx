@@ -183,6 +183,43 @@ class EncodersTest(parameterized.TestCase):
           (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
       )
 
+  @chex.variants(with_jit=True)
+  @parameterized.named_parameters(
+      ('train', False, True),
+      ('scan', True, False),
+      ('scan_and_train', True, True),
+  )
+  def test_text_encoder(self, scan: bool, train: bool):
+    batch_size, seq_len, vocab_size, dim = 1, 10, 20, 8
+    np_inputs = np.random.randint(0, vocab_size, [batch_size, seq_len]).astype(
+        'int32'
+    )
+    inputs = jnp.asarray(np_inputs)
+    np_paddings = np.zeros([batch_size, seq_len], dtype='float32')
+    np_paddings[:, seq_len // 2 :] = 1
+    paddings = jnp.asarray(np_paddings)
+
+    prng_key = jax.random.PRNGKey(seed=123)
+    enc = encoders.TextEncoder(
+        name='enc',
+        vocabulary_size=vocab_size,
+        num_class_tokens=1,
+        model_dim=dim,
+        num_layers=2,
+        mlp_dim=4,
+        num_heads=2,
+        atten_logit_cap=50.0,
+        scan=scan,
+    )
+
+    @self.variant
+    def var_fn():
+      return enc.init_with_output(prng_key, inputs, paddings, train=train)
+
+    outputs, params = var_fn()
+    self.assertLen(jax.tree_util.tree_flatten(params)[0], 20 if scan else 36)
+    self.assertEqual(outputs.shape, (batch_size, seq_len + 1, dim))
+
 
 if __name__ == '__main__':
   absltest.main()

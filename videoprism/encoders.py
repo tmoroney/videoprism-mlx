@@ -325,15 +325,14 @@ class VisionTransformer(nn.Module):
     """Applies the ViT model to the inputs.
 
     Args:
-      inputs: Input image tensor of allowed shapes: - [B, H, W, 3], where inputs
-        are images - [B, N, D], where inputs are a sequence of embeddings or
-        patches
+      inputs: Input tensor of shape [B, N, D], which are sequences of embeddings
+        or patches.
       paddings: Optional [B, N] padding field of inputs when inputs are with [B,
         N, D].
       train: If the model is in the train mode.
 
     Returns:
-      Output tensor of shape [B, D] or [B, N, D] if pooled == False.
+      Output tensor of shape [B, N, D].
     """
     features = inputs
     if paddings is None:
@@ -525,3 +524,98 @@ class FactorizedEncoder(nn.Module):
       return features, {'spatial_features': spatial_features}
     else:
       return features
+
+
+class TextEncoder(nn.Module):
+  """CoCa-style text encoder.
+
+  Reference: https://arxiv.org/abs/2205.01917
+
+  Attributes:
+    vocabulary_size: Vocabulary size of the text tokens.
+    num_class_tokens: Number of class tokens.
+    enable_causal_atten: Whether to enable causal attention.
+    model_dim: The model dimension.
+    num_tfm_layers: Number of layers in this model.
+    mlp_dim: The hidden layer dimension of FFN in Transformer layers.
+    num_heads: Number of attention heads.
+    enable_per_dim_scale: Whether to ensable rescaling of attention logits with
+      1/sqrt(dim) factor.
+    atten_logit_cap: Cap the absolute values of logits by tanh. Enabled when a
+      positive value is specified. May not be supported by a subclass.
+    norm_policy: Policy for applying normalization wrt. transformations. Options
+      are: (1) "pre", applied before transformation. (2) "primer_hybrid",
+        applied before and after transformation. (3) "post", applied after
+        transformation. (4) "post_skip", applied after the skip connection.
+    scan: Whether to use `nn.remat` and`nn.scan`.
+  """
+
+  vocabulary_size: int = 128
+  num_class_tokens: int = 0
+  enable_causal_atten: bool = True
+  model_dim: int = 768
+  num_layers: int = 12
+  mlp_dim: int = 3072
+  num_heads: int = 12
+  atten_logit_cap: float = 0.0
+  norm_policy: str = 'pre'
+  enable_per_dim_scale: bool = False
+  scan: bool = False
+
+  @nn.compact
+  def __call__(
+      self, inputs: Array, paddings: Array, train: bool = False
+  ) -> Array:
+    """Applies the text encoder to the inputs.
+
+    Args:
+      inputs: Input tensor of shape [B, N] including sequences of token ids.
+      paddings: Optional [B, N] padding field of inputs.
+      train: If the model is in the train mode.
+
+    Returns:
+      Output tensor of shape [B, N, D].
+    """
+    batch_size, seq_length = inputs.shape
+
+    pos_emb = PositionalEmbedding(
+        name='pos_emb',
+        embedding_dim=self.model_dim,
+    )(seq_length=seq_length)
+    input_emb = Embedding(
+        name='token_emb',
+        num_classes=self.vocabulary_size,
+        input_dim=self.model_dim,
+        scale_sqrt_depth=True,
+    )(inputs)
+    features = input_emb + pos_emb
+
+    if self.num_class_tokens > 0:
+      cls_emb = self.param(
+          'cls_emb',
+          nn.initializers.normal(stddev=1.0 / math.sqrt(self.model_dim)),
+          [1, self.num_class_tokens, self.model_dim],
+      )
+      cls_emb = jnp.tile(cls_emb, [batch_size, 1, 1])
+      cls_emb *= self.model_dim**0.5
+      features = jnp.concatenate([features, cls_emb], axis=1)
+
+      cls_paddings = jnp.zeros(
+          [batch_size, self.num_class_tokens], dtype=paddings.dtype
+      )
+      paddings = jnp.concatenate([paddings, cls_paddings], axis=-1)
+
+    features = layers.StackedTransformer(
+        name='unimodal_transformer',
+        num_layers=self.num_layers,
+        hidden_dim=self.mlp_dim,
+        num_heads=self.num_heads,
+        atten_logit_cap=self.atten_logit_cap,
+        norm_policy=self.norm_policy,
+        internal_enable_per_dim_scale=self.enable_per_dim_scale,
+        activation_fn=jax.nn.relu,
+        enable_causal_atten=self.enable_causal_atten,
+        scan=self.scan,
+    )(features, paddings, train=train)
+    features = layers.LayerNorm(name='unimodal_ln')(features)
+    return features
