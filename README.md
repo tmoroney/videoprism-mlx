@@ -3,6 +3,7 @@
 [![Paper](https://img.shields.io/badge/arXiv-2402.13217-red.svg)](https://arxiv.org/abs/2402.13217)
 [![Blog](https://img.shields.io/badge/Google_Research-Blog-green.svg)](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)
 [![Colab Demo](https://img.shields.io/static/v1?label=Demo&message=Google%20Colab&logo=google&color=orange)](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)
+[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/google/videoprism)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 [VideoPrism](https://arxiv.org/abs/2402.13217) is a general-purpose video
@@ -22,13 +23,13 @@ functions for checkpoint loading and model inference.
 
 ## Updates
 
+* **[Jun-15-25]:** Added models to HuggingFace. [[`HuggingFace Link`](https://huggingface.co/google/videoprism)]
 * **[Jun-05-25]:** Added Colab notebook for demo. [[`Colab Demo`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)]
 * **[Jun-03-25]:** VideoPrism video encoders (ViT-B and ViT-L) are released. [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)] :fire::fire:
 
 ## TODOs
 
 - [ ] Release text encoders for cross-modal retrieval.
-- [ ] Release models on Hugging Face.
 - [ ] Add PyTorch model support.
 
 ## Getting started
