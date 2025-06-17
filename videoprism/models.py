@@ -47,7 +47,7 @@ CHECKPOINTS = {
         'gs://videoprism/v1/flax_base_f16r288_repeated.npz'
     ),
     'videoprism_public_v1_large': (
-        'gs://videoprism/v1/flax_large_f16r288_repeated.npz'
+        'gs://videoprism/v1/flax_large_f8r288_repeated.npz'
     ),
 }
 
