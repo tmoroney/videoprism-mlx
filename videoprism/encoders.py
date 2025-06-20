@@ -396,7 +396,7 @@ class FactorizedEncoder(nn.Module):
     Returns:
       embeddings: Output tensor for video embeddings of shape [B, T * N, D].
       outputs: A dictionary of additional outputs, including `spatial_features`
-        (shape = [B, T, H', W', D]). Empty if `return_intermediate` is False.
+        (shape = [B, T * N, D]). Empty if `return_intermediate` is False.
     """
     b, t, h, w, c = inputs.shape
     assert h == w
@@ -445,7 +445,7 @@ class FactorizedEncoder(nn.Module):
       embeddings: Output tensor for video embedding sequence of shape [B, T * N,
         D].
       outputs: A dictionary of additional outputs, including `spatial_features`
-        of shape [B, T, H', W', D]. Empty if `return_intermediate` is False.
+        of shape [B, T * N, D]. Empty if `return_intermediate` is False.
     """
     t, h, w = image_shape
     b = patches.shape[0] // t
