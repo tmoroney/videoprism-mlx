@@ -165,23 +165,20 @@ class EncodersTest(parameterized.TestCase):
           frame_paddings=frame_paddings,
       )
 
-    if return_intermediate:
-      (outputs, intermediate_outputs), params = var_fn()
-    else:
-      outputs, params = var_fn()
-      intermediate_outputs = None
+    (embeddings, outputs), params = var_fn()
 
     self.assertLen(jax.tree_util.tree_flatten(params)[0], 40 if scan else 72)
     self.assertEqual(
-        outputs.shape,
+        embeddings.shape,
         (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
     )
     if return_intermediate:
-      spatial_features = intermediate_outputs['spatial_features']
       self.assertEqual(
-          spatial_features.shape,
+          outputs['spatial_features'].shape,
           (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
       )
+    else:
+      self.assertEmpty(outputs)
 
   @chex.variants(with_jit=True)
   @parameterized.named_parameters(

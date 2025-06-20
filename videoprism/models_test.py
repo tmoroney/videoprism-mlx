@@ -40,8 +40,8 @@ class ModelsTest(parameterized.TestCase):
     def forward_fn(mdl_inputs):
       return mdl.apply(mdl_params, mdl_inputs, train=False)
 
-    outputs = forward_fn(inputs)
-    self.assertEqual(outputs.shape, (batch_size, num_frames * 16**2, 768))
+    embeddings, _ = forward_fn(inputs)
+    self.assertEqual(embeddings.shape, (batch_size, num_frames * 16**2, 768))
 
 
 if __name__ == '__main__':
