@@ -55,6 +55,7 @@ class ModelsTest(parameterized.TestCase):
         ['blah', 'blah blah', 'blah blah blah'],
         max_length=6,
         add_bos=False,
+        canonicalize=False,
     )
     np.testing.assert_array_equal(
         ids,

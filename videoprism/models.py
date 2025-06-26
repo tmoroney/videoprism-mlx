@@ -139,10 +139,17 @@ def load_pretrained_weights(
   return flax.core.freeze(variables)
 
 
-def load_tokenizer(name: str) -> tokenizers.Tokenizer:
-  """Loads a tokenizer by name."""
+def load_text_tokenizer(name: str) -> tokenizers.Tokenizer:
+  """Loads a text tokenizer by name.
+
+  Args:
+    name: A string for the text tokenizer model name.
+
+  Returns:
+    A text tokenizer.
+  """
   if name not in TEXT_TOKENIZERS:
-    raise ValueError(f'Tokenizer `{name}` not found.')
+    raise ValueError(f'Text tokenizer `{name}` not found.')
 
   model_path = TEXT_TOKENIZERS[name]
   return tokenizers.SentencePieceTokenizer(model_path)
@@ -153,6 +160,7 @@ def tokenize_texts(
     inputs: Sequence[str],
     max_length: int,
     add_bos: bool | None = None,
+    canonicalize: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
   """Tokenizes a batch of texts.
 
@@ -163,11 +171,16 @@ def tokenize_texts(
     add_bos: Whether to add a beginning-of-sentence token. If None, the
       beginning-of-sentence token will be added if the tokenizer's bos_token is
       a non-negative integer.
+    canonicalize: Whether to canonicalize the texts before tokenization.
 
   Returns:
     A tuple of two numpy arrays containing the padded token ids and the
     corresponding paddings, where 1 denotes padding token.
   """
+
+  if canonicalize:
+    inputs = [utils.canonicalize_text(text) for text in inputs]
+
   batch_ids, batch_paddings = [], []
   if add_bos is None:
     add_bos = tokenizer.bos_token >= 0

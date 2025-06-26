@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for checkpoints."""
+"""Utility functions for checkpointing and other purposes."""
 
 import collections
 from collections.abc import Mapping, Sequence
 import io
 import os
+import string
 
 import jax
 import numpy as np
@@ -133,3 +134,35 @@ def load_checkpoint(npz):
     npz = npload(npz)
   keys, values = zip(*list(npz.items()))
   return recover_tree(keys, values)
+
+
+def canonicalize_text(text: str) -> str:
+  """Canonicalizes text.
+
+  Canonicalization includes:
+  - Replace all punctuation with a whitespace.
+  - Use all lower case.
+  - Leave only one whitespace between words.
+  - End with a period.
+
+  Examples:
+    "Hello, World!" -> "hello world."
+    "Hello,World.." -> "hello world."
+    "  Hello   WORLD" -> "hello world."
+
+  Args:
+    text: A string for the input text.
+
+  Returns:
+    A string for the canonicalized text.
+  """
+  # Replace all punctuation with a whitespace.
+  p = string.punctuation
+  text = text.translate(str.maketrans(p, " " * len(p)))
+  # Use all lower case.
+  text = text.lower()
+  # Leave only one whitespace between words.
+  text = " ".join(text.split())
+  # End with a period.
+  text = text + "."
+  return text
