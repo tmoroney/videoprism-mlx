@@ -101,7 +101,7 @@ def _causal_mask(input_t: Array) -> Array:
   """
   assert jnp.issubdtype(input_t.dtype, jnp.floating), input_t.dtype
   large_negative_number = _get_large_negative_number(input_t.dtype)
-  t = input_t.shape[1]
+  t = input_t.shape[-2]
   col_idx = jnp.tile(jnp.arange(t)[jnp.newaxis, :], [t, 1])
   row_idx = jnp.tile(jnp.arange(t)[:, jnp.newaxis], [1, t])
   mask = (row_idx < col_idx).astype(input_t.dtype) * large_negative_number
@@ -141,14 +141,14 @@ def _merge_masks(a: Array, b: Array) -> Array:
     query_mask = jnp.transpose(key_mask, [0, 1, 3, 2])
     return jnp.minimum(query_mask, key_mask)
 
-  if a.shape[2] != b.shape[2]:
-    if a.shape[2] == 1:
+  if a.shape[-2] != b.shape[-2]:
+    if a.shape[-2] == 1:
       a = expand_t(a)
     else:
-      assert b.shape[2] == 1
+      assert b.shape[-2] == 1
       b = expand_t(b)
 
-  assert a.shape[1:] == b.shape[1:], f'a.shape={a.shape}, b.shape={b.shape}.'
+  assert a.shape[-3:] == b.shape[-3:], f'a.shape={a.shape}, b.shape={b.shape}.'
   return jnp.minimum(a, b)
 
 
@@ -567,7 +567,7 @@ class DotProductAttention(nn.Module):
     # If there is no padding mask, and only causal mask then the shape can be
     # [1, 1, T, S].
     assert atten_mask.ndim == 4 and atten_mask.shape[-1] == key.shape[-3]
-    assert atten_mask.shape[2] in [query.shape[1], 1]
+    assert atten_mask.shape[-2] in [query.shape[-3], 1]
     assert atten_mask.shape[0] in [key.shape[0], 1]
 
     query = self._scale_query(query)
@@ -995,7 +995,7 @@ class AttenTokenPoolingLayer(nn.Module):
     input_dim = tokens.shape[-1]
     query_dim = self.query_dim or input_dim
     hidden_dim = self.hidden_dim if self.hidden_dim > 0 else 4 * input_dim
-    batch_size, seq_length = tokens.shape[:2]
+    batch_size, seq_length = tokens.shape[0], tokens.shape[-2]
 
     query = self.param(
         'pooling_attention_query',
