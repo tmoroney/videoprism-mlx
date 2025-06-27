@@ -62,7 +62,7 @@ def _image_to_patch(inputs: Array, patch_size: int) -> Array:
     raise ValueError(
         f'Image should be formatted as 4D [B, H, W, C], Shape: {inputs.shape}'
     )
-  height, width, channels = inputs.shape[1:]
+  height, width, channels = inputs.shape[-3:]
 
   if height % patch_size != 0 or width % patch_size != 0:
     raise ValueError(
@@ -99,8 +99,8 @@ def _interpolate_emb_1d(emb: Array, target_emb_length: int) -> Array:
   if len(emb.shape) > 3 or emb.shape[0] != 1:
     raise ValueError('The shape of the embedding should be (1, N, D)')
 
-  emb_dim = emb.shape[2]
-  emb = jnp.reshape(emb, (emb.shape[1], emb_dim))
+  emb_dim = emb.shape[-1]
+  emb = jnp.squeeze(emb, axis=0)
 
   target_emb = jax.image.resize(
       emb, (target_emb_length, emb_dim), method='bilinear'
@@ -129,10 +129,10 @@ def _interpolate_emb_2d(
   if len(emb.shape) > 3 or emb.shape[0] != 1:
     raise ValueError('The shape of the embedding should be (1, H * W, D)')
 
-  if emb.shape[1] != source_emb_shape[0] * source_emb_shape[1]:
+  if emb.shape[-2] != source_emb_shape[0] * source_emb_shape[1]:
     raise ValueError('The shape of the embedding does NOT match input specs.')
 
-  emb_dim = emb.shape[2]
+  emb_dim = emb.shape[-1]
   emb = jnp.reshape(emb, (source_emb_shape[0], source_emb_shape[1], emb_dim))
 
   target_emb = jax.image.resize(
@@ -234,7 +234,9 @@ class PositionalEmbedding(nn.Module):
         position[:, :, jnp.newaxis]
         * inv_timescales[jnp.newaxis, jnp.newaxis, :]
     )
-    embs = jnp.concatenate([jnp.sin(scaled_time), jnp.cos(scaled_time)], axis=2)
+    embs = jnp.concatenate(
+        [jnp.sin(scaled_time), jnp.cos(scaled_time)], axis=-1
+    )
     # Force usage of `np` to compute static values at trace time.
     embs = jnp.pad(embs, [[0, 0], [0, 0], [0, np.mod(self.embedding_dim, 2)]])
     return embs
@@ -410,7 +412,7 @@ class FactorizedEncoder(nn.Module):
       reshaped_frame_paddings = frame_paddings.reshape(b * t)  # (B * T,).
       num_patches = patches.shape[1]
       patches_paddings = jnp.repeat(
-          reshaped_frame_paddings[:, jnp.newaxis], num_patches, axis=1
+          reshaped_frame_paddings[:, jnp.newaxis], num_patches, axis=-1
       )  # (B * T, num_patches).
 
     embeddings, outputs = self.encode_with_patches(
@@ -457,7 +459,7 @@ class FactorizedEncoder(nn.Module):
     )(patches)
 
     # Add spatial positional encoding.
-    spatial_pos_emb_shape = self.pos_emb_shape[1:]
+    spatial_pos_emb_shape = self.pos_emb_shape[-2:]
     spatial_seq_length = np.prod(spatial_pos_emb_shape)
     spatial_pos_emb = TrainablePositionalEmbedding(
         name='spatial_pos_emb',
@@ -602,7 +604,7 @@ class TextEncoder(nn.Module):
       )
       cls_emb = jnp.tile(cls_emb, [batch_size, 1, 1])
       cls_emb *= self.model_dim**0.5
-      features = jnp.concatenate([features, cls_emb], axis=1)
+      features = jnp.concatenate([features, cls_emb], axis=-2)
 
       cls_paddings = jnp.zeros(
           [batch_size, self.num_class_tokens], dtype=paddings.dtype
