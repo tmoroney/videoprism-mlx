@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Layers for video encoders."""
+"""Modules for video encoders."""
 
 from collections.abc import Sequence
 import math
+from typing import Any
 
 import einops
 import einshape
@@ -530,6 +531,46 @@ class FactorizedEncoder(nn.Module):
           '(bt)nd->b(tn)d', spatial_features, t=t
       )
     return embeddings, outputs
+
+
+class FactorizedVideoClassifier(nn.Module):
+  """Video classifier with `FactorizedEncoder` backbone.
+
+  Attributes:
+    encoder_params: A dictionary of parameters for `FactorizedEncoder`.
+    num_classes: Number of output classes.
+  """
+
+  encoder_params: dict[str, Any]
+  num_classes: int
+
+  @nn.compact
+  def __call__(self, inputs: Array, train: bool = False):
+    """Applies video classifier to inputs.
+
+    Args:
+      inputs: Input tensor of shape [B, T, H, W, 3].
+      train: Whether the model is in the training mode.
+
+    Returns:
+      Output tensor of shape [B, num_classes].
+    """
+    features, _ = FactorizedEncoder(name='encoder', **self.encoder_params)(
+        inputs, train=train
+    )
+    embeddings = layers.AttenTokenPoolingLayer(
+        name='atten_pooler',
+        num_heads=self.encoder_params['num_heads'],
+        hidden_dim=self.encoder_params['model_dim'],
+        num_queries=1,
+    )(features, paddings=None, train=train)
+    embeddings = jnp.squeeze(embeddings, axis=-2)
+    logits = layers.FeedForward(
+        name='projection',
+        output_dim=self.num_classes,
+        activation_fn=layers.identity,
+    )(embeddings)
+    return logits
 
 
 class TextEncoder(nn.Module):

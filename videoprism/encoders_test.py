@@ -181,6 +181,42 @@ class EncodersTest(parameterized.TestCase):
       self.assertEmpty(outputs)
 
   @chex.variants(with_jit=True)
+  def test_factorized_video_classifier(self):
+    batch_size, num_frames, image_size, patch_size, dim = 1, 4, 16, 4, 8
+    np_inputs = np.random.normal(
+        0.0,
+        0.1,
+        [batch_size, num_frames, image_size, image_size, 3],
+    ).astype('float32')
+    inputs = jnp.asarray(np_inputs)
+
+    encoder_params = dict(
+        patch_size=patch_size,
+        pos_emb_shape=(16, 16, 16),
+        model_dim=dim,
+        num_spatial_layers=2,
+        num_temporal_layers=2,
+        num_heads=2,
+        mlp_dim=4,
+        atten_logit_cap=50.0,
+        scan=True,
+    )
+    prng_key = jax.random.PRNGKey(seed=123)
+    classifier = encoders.FactorizedVideoClassifier(
+        name='classifier',
+        encoder_params=encoder_params,
+        num_classes=10,
+    )
+
+    @self.variant
+    def var_fn():
+      return classifier.init_with_output(prng_key, inputs, train=False)
+
+    logits, params = var_fn()
+    self.assertLen(jax.tree_util.tree_flatten(params)[0], 54)
+    self.assertEqual(logits.shape, (batch_size, 10))
+
+  @chex.variants(with_jit=True)
   @parameterized.named_parameters(
       ('train', False, True),
       ('scan', True, False),
