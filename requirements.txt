@@ -3,5 +3,6 @@ absl-py
 einops
 einshape
 flax
+huggingface-hub
 sentencepiece
 tensorflow-cpu

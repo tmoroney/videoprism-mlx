@@ -39,6 +39,7 @@ outputs = forward_fn(model_inputs)
 from collections.abc import Mapping, Sequence
 
 import flax
+import huggingface_hub
 import numpy as np
 from videoprism import encoders
 from videoprism import tokenizers
@@ -56,6 +57,15 @@ CHECKPOINTS = {
     ),
     'videoprism_public_v1_large': (
         'gs://videoprism/v1/flax_large_f8r288_repeated.npz'
+    ),
+    # Hugging Face checkpoints (repository, filename)
+    'videoprism_public_v1_base_hf': (
+        'google/videoprism',
+        'flax_base_f16r288_repeated.npz',
+    ),
+    'videoprism_public_v1_large_hf': (
+        'google/videoprism',
+        'flax_large_f8r288_repeated.npz',
     ),
 }
 
@@ -114,6 +124,8 @@ def videoprism_v1_giant():
 MODELS = {
     'videoprism_public_v1_base': videoprism_v1_base,
     'videoprism_public_v1_large': videoprism_v1_large,
+    'videoprism_public_v1_base_hf': videoprism_v1_base,
+    'videoprism_public_v1_large_hf': videoprism_v1_large,
 }
 
 
@@ -122,7 +134,7 @@ def load_pretrained_weights(
     checkpoint_path: str | None = None,
     checkpoints: Mapping[str, str] | None = None,
 ):
-  """Loads pretrained model weight.
+  """Loads pretrained model weight from Google Cloud storage or HuggingFace.
 
   Args:
     model_name: A string for the model name.
@@ -135,6 +147,12 @@ def load_pretrained_weights(
   """
   checkpoints = checkpoints or CHECKPOINTS
   checkpoint_path = checkpoint_path or checkpoints.get(model_name)
+  # Handle Hugging Face checkpoints using suffix _hf.
+  if model_name is not None and model_name.endswith('_hf'):
+    repo_id, filename = checkpoint_path
+    checkpoint_path = huggingface_hub.hf_hub_download(
+        repo_id=repo_id, filename=filename
+    )
   variables = utils.load_checkpoint(checkpoint_path)
   return flax.core.freeze(variables)
 
