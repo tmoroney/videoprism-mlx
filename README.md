@@ -3,7 +3,7 @@
 [![Paper](https://img.shields.io/badge/arXiv-2402.13217-red.svg)](https://arxiv.org/abs/2402.13217)
 [![Blog](https://img.shields.io/badge/Google_Research-Blog-green.svg)](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)
 [![Colab Demo](https://img.shields.io/static/v1?label=Demo&message=Google%20Colab&logo=google&color=orange)](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)
-[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/google/videoprism)
+[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/collections/google/videoprism-686e823d6070ec6ad9e4b1f2)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 [VideoPrism](https://arxiv.org/abs/2402.13217) is a general-purpose video
@@ -23,9 +23,9 @@ functions for checkpoint loading and model inference.
 
 ## Updates
 
-* **[Jun-15-25]:** Added models to HuggingFace. [[`HuggingFace Link`](https://huggingface.co/google/videoprism)]
-* **[Jun-05-25]:** Added Colab notebook for demo. [[`Colab Demo`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)]
-* **[Jun-03-25]:** VideoPrism video encoders (ViT-B and ViT-L) are released. [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)] :fire::fire:
+* **[Jun-15-25]:** Added models to [[Hugging Face](https://huggingface.co/collections/google/videoprism-686e823d6070ec6ad9e4b1f2)].
+* **[Jun-05-25]:** Added video encoder demo [[Colab notebook](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)].
+* **[Jun-03-25]:** Released VideoPrism video encoders (Base and Large). [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)] :fire::fire:
 
 ## TODOs
 
@@ -70,8 +70,8 @@ We release the following model variants:
 
 | Model Name | Configuration Name | Model Type | Backbone | #Params | File Size | Checkpoint |
 | -------- | -------- | ------- | :-------: | :-------: | :-------: | :-------: |
-| VideoPrism-B | `videoprism_public_v1_base_hf`  | Video encoder | ViT-B | 114M | 458MB | [link](https://huggingface.co/google/videoprism/blob/main/flax_base_f16r288_repeated.npz) |
-| VideoPrism-L | `videoprism_public_v1_large_hf` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://huggingface.co/google/videoprism/blob/main/flax_large_f8r288_repeated.npz) |
+| VideoPrism-B | `videoprism_public_v1_base_hf`  | Video encoder | ViT-B | 114M | 458MB | [link](https://huggingface.co/google/videoprism-base-f16r288) |
+| VideoPrism-L | `videoprism_public_v1_large_hf` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://huggingface.co/google/videoprism-large-f8r288) |
 
 The models take videos with shape `(num_frames, 288, 288, 3)` as inputs and
 outputs embeddings with shape `(num_frames * 16 * 16, feature_channels)` which

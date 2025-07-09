@@ -60,11 +60,11 @@ CHECKPOINTS = {
     ),
     # Hugging Face checkpoints (repository, filename)
     'videoprism_public_v1_base_hf': (
-        'google/videoprism',
+        'google/videoprism-base-f16r288',
         'flax_base_f16r288_repeated.npz',
     ),
     'videoprism_public_v1_large_hf': (
-        'google/videoprism',
+        'google/videoprism-large-f8r288',
         'flax_large_f8r288_repeated.npz',
     ),
 }
