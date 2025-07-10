@@ -37,6 +37,7 @@ outputs = forward_fn(model_inputs)
 """
 
 from collections.abc import Mapping, Sequence
+import functools
 
 import flax
 import huggingface_hub
@@ -45,10 +46,12 @@ from videoprism import encoders
 from videoprism import tokenizers
 from videoprism import utils
 
+TEXT_MAX_LEN: int = 64
 TEXT_TOKENIZERS = {
-    'c4_en': (  # vocab_size=32_000
-        'gs://t5-data/vocabs/cc_en.32000/sentencepiece.model'
-    ),
+    'c4_en': {
+        'model_path': 'gs://t5-data/vocabs/cc_en.32000/sentencepiece.model',
+        'vocab_size': 32_000,
+    },
 }
 
 CHECKPOINTS = {
@@ -169,14 +172,14 @@ def load_text_tokenizer(name: str) -> tokenizers.Tokenizer:
   if name not in TEXT_TOKENIZERS:
     raise ValueError(f'Text tokenizer `{name}` not found.')
 
-  model_path = TEXT_TOKENIZERS[name]
+  model_path = TEXT_TOKENIZERS[name]['model_path']
   return tokenizers.SentencePieceTokenizer(model_path)
 
 
 def tokenize_texts(
     tokenizer: tokenizers.Tokenizer,
     inputs: Sequence[str],
-    max_length: int,
+    max_length: int = TEXT_MAX_LEN,
     add_bos: bool | None = None,
     canonicalize: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
