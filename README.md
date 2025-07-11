@@ -50,7 +50,7 @@ import jax
 from videoprism import models as vp
 
 model_name = 'videoprism_public_v1_large_hf'  # configuration name
-flax_model = vp.MODELS[model_name]()
+flax_model = vp.get_model(model_name)
 loaded_state = vp.load_pretrained_weights(model_name)
 
 @jax.jit

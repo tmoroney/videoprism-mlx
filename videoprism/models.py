@@ -24,7 +24,7 @@ Example usage:
 from videoprism import models as vp
 
 model_name = 'videoprism_public_v1_base'
-flax_model = vp.MODELS[model_name]()
+flax_model = vp.get_model(model_name)
 loaded_state = vp.load_pretrained_weights(model_name)
 
 @jax.jit
@@ -36,10 +36,11 @@ outputs = forward_fn(model_inputs)
 ```
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import functools
 
 import flax
+from flax import linen as nn
 import huggingface_hub
 import numpy as np
 from videoprism import encoders
@@ -130,6 +131,32 @@ MODELS = {
     'videoprism_public_v1_base_hf': videoprism_v1_base,
     'videoprism_public_v1_large_hf': videoprism_v1_large,
 }
+
+
+def get_model(
+    model_name: str | None,
+    model_fn: Callable[[], nn.Module] | None = None,
+    models: Mapping[str, Callable[[], nn.Module]] | None = None,
+):
+  """Returns VideoPrism model with the given name.
+
+  Args:
+    model_name: A string for the model name.
+    model_fn: Optional function that returns the model.
+    models: Mapping from model name to model creation function. Used with
+      `model_name`. If None, use the default `MODELS`.
+
+  Returns:
+    A Flax VideoPrism model.
+  """
+  if model_fn is None:
+    models = models or MODELS
+    if model_name not in models:
+      raise ValueError(f'Model `{model_name}` not found.')
+
+    model_fn = models[model_name]
+
+  return model_fn()
 
 
 def load_pretrained_weights(
