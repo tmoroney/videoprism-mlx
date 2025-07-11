@@ -666,3 +666,145 @@ class TextEncoder(nn.Module):
     )(features, paddings, train=train)
     features = layers.LayerNorm(name='unimodal_ln')(features)
     return features
+
+
+class FactorizedVideoCLIP(nn.Module):
+  """Video CLIP model with a factorized vision encoder."""
+
+  # Vision parameters.
+  patch_size: int = 18
+  pos_emb_shape: tuple[int, int, int] = (16, 16, 16)
+  num_spatial_layers: int = 12
+  num_temporal_layers: int = 4
+  mlp_dim: int = 3072
+  num_auxiliary_layers: int = 0
+  # Text parameters.
+  vocabulary_size: int = 128
+  enable_causal_atten: bool = True
+  num_unimodal_layers: int = 12
+  norm_policy: str = 'pre'
+  # Shared parameters.
+  model_dim: int = 768
+  num_heads: int = 12
+  atten_logit_cap: float = 0.0
+  scan: bool = False
+
+  @nn.compact
+  def __call__(
+      self,
+      inputs: Array | None = None,
+      text_token_ids: Array | None = None,
+      text_paddings: Array | None = None,
+      train: bool = False,
+      normalize: bool = True,
+      return_intermediate: bool = False,
+      frame_paddings: Array | None = None,
+  ) -> tuple[Array | None, Array | None, dict[str, Array]]:
+    """Computes predictions for `input_batch`.
+
+    Args:
+      inputs: Input frame image tensor of shape [B, T, H, W, 3] (H == W).
+      text_token_ids: Input text token id tensor of shape [B, L, D].
+      text_paddings: Input text paddings of shape [B, L]. Required if
+        `text_token_ids` is not None.
+      train: If the model is in the train mode.
+      normalize: Whether to normalize the output embeddings.
+      return_intermediate: If intermediate features are returned.
+      frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
+        1 denotes padding frame.
+
+    Returns:
+      video_embeddings: Output contrastive video embeddings of shape [B, D].
+        None if `inputs` is None.
+      text_embeddings: Output contrastive text embeddings of shape [B, D]. None
+        if `text_token_ids` is None.
+      outputs: A dictionary of additional outputs, including `spatial_features`
+        of shape [B, T * N, D], `spatiotemporal_features` of shape [B, T * N,
+        D], and `frame_embeddings` of shape [B, T, D]. Empty if
+        `return_intermediate` is False.
+    """
+    video_embeddings, text_embeddings, outputs = None, None, {}
+
+    if inputs is not None:
+      num_frames = inputs.shape[-4]
+      vision_features, vision_outputs = FactorizedEncoder(
+          name='vision_encoder',
+          patch_size=self.patch_size,
+          pos_emb_shape=self.pos_emb_shape,
+          model_dim=self.model_dim,
+          num_spatial_layers=self.num_spatial_layers,
+          num_temporal_layers=self.num_temporal_layers,
+          num_heads=self.num_heads,
+          mlp_dim=self.mlp_dim,
+          atten_logit_cap=self.atten_logit_cap,
+          norm_policy='pre',
+          scan=self.scan,
+      )(
+          inputs,
+          train=train,
+          return_intermediate=return_intermediate,
+          frame_paddings=frame_paddings,
+      )
+      outputs.update(vision_outputs)
+      if return_intermediate:
+        outputs['spatiotemporal_features'] = vision_features
+
+      if self.num_auxiliary_layers > 0:
+        vision_features = VisionTransformer(
+            name='auxiliary_encoder',
+            num_tfm_layers=self.num_auxiliary_layers,
+            mlp_dim=self.mlp_dim,
+            num_heads=self.num_heads,
+            atten_logit_cap=self.atten_logit_cap,
+            norm_policy='pre',
+            scan=self.scan,
+        )(vision_features, train=train)
+
+      pooling_layer = layers.AttenTokenPoolingLayer(
+          name='contrastive_vision_pooler',
+          hidden_dim=self.model_dim * 4,
+          num_heads=self.num_heads,
+          num_queries=1,
+      )
+      video_embeddings = pooling_layer(vision_features, None, train=train)
+
+      # Squeeze the query dimension in the pooler output.
+      video_embeddings = jnp.squeeze(video_embeddings, axis=-2)
+      if normalize:
+        video_embeddings = _l2_normalize(video_embeddings, axis=-1)
+
+      if return_intermediate:
+        frame_features = einshape.jax_einshape(
+            'b(tn)d->(bt)nd', vision_features, t=num_frames
+        )
+        frame_embeddings = pooling_layer(frame_features, None, train=train)
+        frame_embeddings = jnp.squeeze(frame_embeddings, axis=-2)
+        frame_embeddings = einshape.jax_einshape(
+            '(bt)d->btd', frame_embeddings, t=num_frames
+        )
+        if normalize:
+          frame_embeddings = _l2_normalize(frame_embeddings, axis=-1)
+        outputs['frame_embeddings'] = frame_embeddings
+
+    if text_token_ids is not None:
+      assert text_paddings is not None, 'Text paddings are required.'
+      text_features = TextEncoder(
+          name='text_encoder',
+          vocabulary_size=self.vocabulary_size,
+          num_class_tokens=1,
+          enable_causal_atten=self.enable_causal_atten,
+          model_dim=self.model_dim,
+          num_layers=self.num_unimodal_layers,
+          num_heads=self.num_heads,
+          mlp_dim=self.model_dim * 4,
+          atten_logit_cap=self.atten_logit_cap,
+          norm_policy=self.norm_policy,
+          scan=self.scan,
+      )(text_token_ids, text_paddings, train=train)
+
+      # Take the last token (i.e., class token) as the text embedding.
+      text_embeddings = text_features[:, -1]
+      if normalize:
+        text_embeddings = _l2_normalize(text_embeddings, axis=-1)
+
+    return video_embeddings, text_embeddings, outputs

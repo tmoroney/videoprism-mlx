@@ -44,6 +44,44 @@ class ModelsTest(parameterized.TestCase):
     embeddings, _ = forward_fn(inputs)
     self.assertEqual(embeddings.shape, (batch_size, num_frames * 16**2, 768))
 
+  def test_videoprism_lvt(self):
+    batch_size, num_frames = 1, 16
+    np_inputs = np.random.normal(
+        0.0, 0.1, [batch_size, num_frames, 288, 288, 3]
+    ).astype('float32')
+    inputs = jnp.asarray(np_inputs)
+    np_text_token_ids = np.random.randint(
+        0, 32_000, [batch_size, models.TEXT_MAX_LEN]
+    ).astype('int32')
+    text_token_ids = jnp.asarray(np_text_token_ids)
+    np_text_paddings = np.zeros(
+        [batch_size, models.TEXT_MAX_LEN], dtype='float32'
+    )
+    np_text_paddings[:, models.TEXT_MAX_LEN // 2 :] = 1
+    text_paddings = jnp.asarray(np_text_paddings)
+    prng_key = jax.random.PRNGKey(seed=123)
+
+    mdl = models.videoprism_lvt_v1_base()
+    mdl_params = mdl.init(
+        prng_key, inputs, text_token_ids, text_paddings, train=False
+    )
+
+    @jax.jit
+    def forward_fn(mdl_inputs, mdl_text_token_ids, mdl_text_paddings):
+      return mdl.apply(
+          mdl_params,
+          mdl_inputs,
+          mdl_text_token_ids,
+          mdl_text_paddings,
+          train=False,
+      )
+
+    vision_embeddings, text_embeddings, _ = forward_fn(
+        inputs, text_token_ids, text_paddings
+    )
+    self.assertEqual(vision_embeddings.shape, (batch_size, 768))
+    self.assertEqual(text_embeddings.shape, (batch_size, 768))
+
   def test_tokenize_texts(self):
     import os
     spm_path = os.path.join(
