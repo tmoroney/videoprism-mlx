@@ -56,6 +56,17 @@ TEXT_TOKENIZERS = {
 }
 
 CHECKPOINTS = {
+    # Recommended.
+    # Hugging Face checkpoints (repository, filename)
+    'videoprism_public_v1_base_hf': (
+        'google/videoprism-base-f16r288',
+        'flax_base_f16r288_repeated.npz',
+    ),
+    'videoprism_public_v1_large_hf': (
+        'google/videoprism-large-f8r288',
+        'flax_large_f8r288_repeated.npz',
+    ),
+    # Not recommended; to be deprecated.
     'videoprism_public_v1_base': (
         'gs://videoprism/v1/flax_base_f16r288_repeated.npz'
     ),
@@ -67,15 +78,6 @@ CHECKPOINTS = {
     ),
     'videoprism_lvt_public_v1_large': (
         'gs://videoprism/v1/flax_lvt_large_f8r288_repeated.npz'
-    ),
-    # Hugging Face checkpoints (repository, filename)
-    'videoprism_public_v1_base_hf': (
-        'google/videoprism-base-f16r288',
-        'flax_base_f16r288_repeated.npz',
-    ),
-    'videoprism_public_v1_large_hf': (
-        'google/videoprism-large-f8r288',
-        'flax_large_f8r288_repeated.npz',
     ),
 }
 
@@ -198,10 +200,12 @@ def videoprism_lvt_v1_giant(text_tokenizer: str = 'c4_en'):
 
 
 MODELS = {
-    'videoprism_public_v1_base': videoprism_v1_base,
-    'videoprism_public_v1_large': videoprism_v1_large,
+    # Recommended.
     'videoprism_public_v1_base_hf': videoprism_v1_base,
     'videoprism_public_v1_large_hf': videoprism_v1_large,
+    # # Not recommended; to be deprecated.
+    'videoprism_public_v1_base': videoprism_v1_base,
+    'videoprism_public_v1_large': videoprism_v1_large,
     'videoprism_lvt_public_v1_base': functools.partial(
         videoprism_lvt_v1_base, text_tokenizer='c4_en'
     ),
