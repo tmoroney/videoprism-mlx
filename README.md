@@ -61,9 +61,6 @@ model_inputs = ...  # Shape = [batch_size, num_frames, height, width, 3].
 outputs = forward_fn(model_inputs)  # Shape = [batch_size, num_tokens, feature_channels].
 ```
 
-**Note:** Please make sure that the model `apply` function is wrapped in
-`jax.jit` to get the correct results.
-
 ## Released models
 
 We release the following model variants:

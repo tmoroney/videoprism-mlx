@@ -39,8 +39,9 @@ outputs = forward_fn(model_inputs)
 from collections.abc import Callable, Mapping, Sequence
 import functools
 
-import flax
 from flax import linen as nn
+import jax
+import jax.numpy as jnp
 import huggingface_hub
 import numpy as np
 from videoprism import encoders
@@ -203,7 +204,7 @@ MODELS = {
     # Recommended.
     'videoprism_public_v1_base_hf': videoprism_v1_base,
     'videoprism_public_v1_large_hf': videoprism_v1_large,
-    # # Not recommended; to be deprecated.
+    # Not recommended; to be deprecated.
     'videoprism_public_v1_base': videoprism_v1_base,
     'videoprism_public_v1_large': videoprism_v1_large,
     'videoprism_lvt_public_v1_base': functools.partial(
@@ -266,7 +267,7 @@ def load_pretrained_weights(
         repo_id=repo_id, filename=filename
     )
   variables = utils.load_checkpoint(checkpoint_path)
-  return flax.core.freeze(variables)
+  return jax.tree_util.tree_map(jnp.asarray, variables)
 
 
 def load_text_tokenizer(name: str) -> tokenizers.Tokenizer:
