@@ -23,13 +23,13 @@ functions for checkpoint loading and model inference.
 
 ## Updates
 
-* **[Jun-15-25]:** Added models to [[Hugging Face](https://huggingface.co/collections/google/videoprism-686e823d6070ec6ad9e4b1f2)].
-* **[Jun-05-25]:** Added video encoder demo [[Colab notebook](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)].
-* **[Jun-03-25]:** Released VideoPrism video encoders (Base and Large). [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)] :fire::fire:
+* **[Jul-16-25]:** Released VideoPrism video-text encoders for cross-modal retrieval [[`Colab notebook`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_text_demo.ipynb)]. :fire::fire:
+* **[Jun-15-25]:** Added models to [[`Hugging Face`](https://huggingface.co/collections/google/videoprism-686e823d6070ec6ad9e4b1f2)].
+* **[Jun-05-25]:** Added video encoder demo [[`Colab notebook`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)].
+* **[Jun-03-25]:** Released VideoPrism video encoders (Base and Large) [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)]. :fire::fire:
 
 ## TODOs
 
-- [ ] Release text encoders for cross-modal retrieval.
 - [ ] Add PyTorch model support.
 
 ## Getting started
@@ -43,13 +43,14 @@ $ pip install .
 ```
 
 Please get started with the following example code for model checkpoint loading
-and inference or use the [Colab Demo](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb):
+and inference or use the [Colab notebook for video encoders](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb) / [Colab notebook for video-text encoders](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_text_demo.ipynb):
 
 ```python
 import jax
 from videoprism import models as vp
 
-model_name = 'videoprism_public_v1_large_hf'  # configuration name
+# Video encoders.
+model_name = 'videoprism_public_v1_base_hf'  # configuration name
 flax_model = vp.get_model(model_name)
 loaded_state = vp.load_pretrained_weights(model_name)
 
@@ -57,8 +58,30 @@ loaded_state = vp.load_pretrained_weights(model_name)
 def forward_fn(inputs):
   return flax_model.apply(loaded_state, inputs, train=False)
 
-model_inputs = ...  # Shape = [batch_size, num_frames, height, width, 3].
-outputs = forward_fn(model_inputs)  # Shape = [batch_size, num_tokens, feature_channels].
+video_inputs = ...  # Shape = [batch_size, num_frames, height, width, 3].
+outputs, _ = forward_fn(video_inputs)  # Shape = [batch_size, num_tokens, feature_channels].
+
+# Video-text encoders.
+model_name = 'videoprism_lvt_public_v1_base'  # configuration name
+flax_model = vp.get_model(model_name)
+loaded_state = vp.load_pretrained_weights(model_name)
+text_tokenizer = vp.load_text_tokenizer('c4_en')
+
+@jax.jit
+def forward_fn(inputs, text_token_ids, text_token_paddings, train=False):
+  return flax_model.apply(
+      loaded_state,
+      inputs,
+      text_token_ids,
+      text_token_paddings,
+      train=train,
+  )
+
+video_inputs = ...  # Shape = [batch_size, num_frames, height, width, 3].
+text_queries = ...  # A list of input text queries.
+text_ids, text_paddings = vp.tokenize_texts(text_tokenizer, text_queries)
+video_embeddings, text_embeddings, _ = forward_fn(
+  video_inputs, text_ids, text_paddings)  # Shape = [batch_size, feature_channels].
 ```
 
 ## Released models
@@ -69,18 +92,34 @@ We release the following model variants:
 | -------- | -------- | ------- | :-------: | :-------: | :-------: | :-------: |
 | VideoPrism-B | `videoprism_public_v1_base_hf`  | Video encoder | ViT-B | 114M | 458MB | [link](https://huggingface.co/google/videoprism-base-f16r288) |
 | VideoPrism-L | `videoprism_public_v1_large_hf` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://huggingface.co/google/videoprism-large-f8r288) |
+| VideoPrism-LvT-B | `videoprism_lvt_public_v1_base`  | Video-text encoders | ViT-B | 248M | 991MB | [link](https://storage.googleapis.com/videoprism/v1/flax_lvt_base_f16r288_repeated.npz) |
+| VideoPrism-LvT-L | `videoprism_lvt_public_v1_large` | Video-text encoders | ViT-L | 580M | 2.30GB | [link](https://storage.googleapis.com/videoprism/v1/flax_lvt_large_f8r288_repeated.npz) |
 
-The models take videos with shape `(num_frames, 288, 288, 3)` as inputs and
-outputs embeddings with shape `(num_frames * 16 * 16, feature_channels)` which
-could be reshaped into `(num_frames, 16, 16, feature_channels)` for
-spatiotemporal representations. During model training, `num_frames` is set to 16
-and 8 for VideoPrism-B and VideoPrism-L, respectively. Both models are expected
-to work with arbitrary `num_frames` by interpolating the temporal positional
-embeddings. The RGB values of input videos should be normalized in [0.0, 1.0].
+Video encoders take videos with shape `(batch_size, num_frames, 288, 288, 3)`
+as inputs and output embeddings with shape
+`(batch_size, num_frames * 16 * 16, feature_channels)` which could be reshaped
+into `(batch_size, num_frames, 16, 16, feature_channels)` for spatiotemporal
+representations. During model training, `num_frames` is set to 16 and 8 for
+VideoPrism-B and VideoPrism-L, respectively. Both models are expected to work
+with arbitrary `num_frames` by interpolating the temporal positional embeddings.
+The RGB values of input videos should be normalized in [0.0, 1.0].
 
-### Results on video-focused tasks ([VideoGLUE](https://arxiv.org/abs/2307.03166)) with frozen backbones
+In video-text models, both video and text encoders produce global embeddings
+with shape `(batch_size, feature_channels)`, whose similarities could be
+measured by cosine distances. We use the `c4_en` [SentencePiece](https://github.com/google/sentencepiece) model for text tokenization. During inference, embedding
+calculation for either modality can be skipped by providing `None` as the input.
 
-| Dataset | K400 | MiT | SSv2 | D48 | Charades | ActivityNet | AVA | AVA-K |
+## Results with frozen backbones
+
+*"Public"* denotes models we released in this repository. *"Paper"* and
+*"Prior SOTA"* denote our models and previous best-performing models reported
+in the [paper](https://arxiv.org/abs/2402.13217), respectively. Our *public*
+models perform slightly worse than the *paper* models due to different
+pre-training image-text data we used subject to data policy.
+
+### Video-focused tasks ([VideoGLUE](https://arxiv.org/abs/2307.03166))
+
+| Models | K400 | MiT | SSv2 | D48 | Charades | ActivityNet | AVA | AVA-K |
 | -------- | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: |
 | **VideoPrism-B (public)** | 82.9 | 39.7 | 62.2 | 64.3 | 43.5 | 36.5 | 28.3 | 30.8 |
 | **VideoPrism-L (public)** | 85.0 | 43.3 | 64.6 | 67.6 | 53.2 | 37.0 | 32.4 | 34.5 |
@@ -89,11 +128,27 @@ embeddings. The RGB values of input videos should be normalized in [0.0, 1.0].
 | Prior SOTA (B) | 77.1 | 34.0 | 58.2 | 55.6 | 33.3 | 35.8 | 21.1 | 25.9 |
 | Prior SOTA (L+) | 82.8 | 40.3 | 67.4 | 69.6 | 39.9 | 36.7 | 24.4 | 26.2 |
 
-*"Public"* denotes models we released in this repository. *"Paper"* and
-*"Prior SOTA"* denote our models and previous best-performing models reported
-in the [paper](https://arxiv.org/abs/2402.13217), respectively. Our *public*
-models perform slightly worse than the *paper* models due to different
-pre-training image-text data we used subject to data policy.
+### Zero-shot video-text retrieval
+
+| Models | MSRVTT-1K (v2t)  | MSRVTT-1K (t2v) | VATEX (v2t) | VATEX (t2v) | ActivityNet (v2t) | ActivityNet (t2v) |
+| -------- | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: |
+| **VideoPrism-LvT-B (public)** | 49.8 | 50.1 | 73.1 | 56.2 | 47.9 | 48.8 |
+| **VideoPrism-LvT-L (public)** | 50.6 | 50.1 | 75.0 | 57.2 | 49.1 | 51.3 |
+| VideoPrism-LvT-B (paper) | 50.2 | 51.4 | 76.2 | 57.7 | 47.9 | 49.6 |
+| VideoPrism-LvT-g (paper) | 51.7 | 52.7 | 77.1 | 62.5 | 50.3 | 52.7 |
+| Prior SOTA (B) | - | 34.0 | - | - | - | 30.6 |
+| Prior SOTA (L+) | 45.4 | 43.9 | 73.6 | 53.2 | 40.7 | 42.8 |
+
+### Zero-shot video classification
+
+| Models | K400 | SSv2 (Temporal) | SSv2 (Events) | NExT-QA (Hard) | Charades | Charades (STA) |
+| -------- | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: |
+| **VideoPrism-LvT-B (public)** | 69.2 | 14.6 | 11.3 | 31.1 | 26.9 | 48.6 |
+| **VideoPrism-LvT-L (public)** | 72.4 | 18.0 | 12.4 | 32.1 | 32.4 | 50.2 |
+| VideoPrism-LvT-B (paper) | 71.3 | 16.1 | 11.9 | 31.3 | 29.2 | 50.0 |
+| VideoPrism-LvT-g (paper) | 74.6 | 18.6 | 15.7 | 32.7 | 32.4 | 50.4 |
+| Prior SOTA (B) | - | 9.8 | 6.4 | 27.6 | 21.1 | - |
+| Prior SOTA (L+) | 72.0 | 15.2 | 11.4 | 25.2 | 25.8 | 47.2 |
 
 ## Citation
 
