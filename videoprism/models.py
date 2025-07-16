@@ -67,6 +67,14 @@ CHECKPOINTS = {
         'google/videoprism-large-f8r288',
         'flax_large_f8r288_repeated.npz',
     ),
+    'videoprism_lvt_public_v1_base_hf': (
+        'google/videoprism-lvt-base-f16r288',
+        'flax_lvt_base_f16r288_repeated.npz',
+    ),
+    'videoprism_lvt_public_v1_large_hf': (
+        'videoprism-lvt-large-f8r288',
+        'flax_lvt_large_f8r288_repeated.npz',
+    ),
     # Not recommended; to be deprecated.
     'videoprism_public_v1_base': (
         'gs://videoprism/v1/flax_base_f16r288_repeated.npz'
@@ -204,6 +212,12 @@ MODELS = {
     # Recommended.
     'videoprism_public_v1_base_hf': videoprism_v1_base,
     'videoprism_public_v1_large_hf': videoprism_v1_large,
+    'videoprism_lvt_public_v1_base_hf': functools.partial(
+        videoprism_lvt_v1_base, text_tokenizer='c4_en'
+    ),
+    'videoprism_lvt_public_v1_large_hf': functools.partial(
+        videoprism_lvt_v1_large, text_tokenizer='c4_en'
+    ),
     # Not recommended; to be deprecated.
     'videoprism_public_v1_base': videoprism_v1_base,
     'videoprism_public_v1_large': videoprism_v1_large,
