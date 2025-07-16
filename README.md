@@ -50,7 +50,7 @@ import jax
 from videoprism import models as vp
 
 # Video encoders.
-model_name = 'videoprism_public_v1_base_hf'  # configuration name
+model_name = 'videoprism_public_v1_base'  # configuration name
 flax_model = vp.get_model(model_name)
 loaded_state = vp.load_pretrained_weights(model_name)
 
@@ -62,7 +62,7 @@ video_inputs = ...  # Shape = [batch_size, num_frames, height, width, 3].
 outputs, _ = forward_fn(video_inputs)  # Shape = [batch_size, num_tokens, feature_channels].
 
 # Video-text encoders.
-model_name = 'videoprism_lvt_public_v1_base_hf'  # configuration name
+model_name = 'videoprism_lvt_public_v1_base'  # configuration name
 flax_model = vp.get_model(model_name)
 loaded_state = vp.load_pretrained_weights(model_name)
 text_tokenizer = vp.load_text_tokenizer('c4_en')
@@ -90,8 +90,8 @@ We release the following model variants:
 
 | Model Name | Configuration Name | Model Type | Backbone | #Params | File Size | Checkpoint |
 | -------- | -------- | ------- | :-------: | :-------: | :-------: | :-------: |
-| VideoPrism-B | `videoprism_public_v1_base_hf`  | Video encoder | ViT-B | 114M | 458MB | [link](https://huggingface.co/google/videoprism-base-f16r288) |
-| VideoPrism-L | `videoprism_public_v1_large_hf` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://huggingface.co/google/videoprism-large-f8r288) |
+| VideoPrism-B | `videoprism_public_v1_base`  | Video encoder | ViT-B | 114M | 458MB | [link](https://huggingface.co/google/videoprism-base-f16r288) |
+| VideoPrism-L | `videoprism_public_v1_large` | Video encoder | ViT-L | 354M | 1.42GB | [link](https://huggingface.co/google/videoprism-large-f8r288) |
 | VideoPrism-LvT-B | `videoprism_lvt_public_v1_base`  | Video-text encoders | ViT-B | 248M | 991MB | [link](https://huggingface.co/google/videoprism-lvt-base-f16r288) |
 | VideoPrism-LvT-L | `videoprism_lvt_public_v1_large` | Video-text encoders | ViT-L | 580M | 2.30GB | [link](https://huggingface.co/google/videoprism-lvt-large-f8r288) |
 

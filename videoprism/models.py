@@ -57,36 +57,22 @@ TEXT_TOKENIZERS = {
 }
 
 CHECKPOINTS = {
-    # Recommended.
     # Hugging Face checkpoints (repository, filename)
-    'videoprism_public_v1_base_hf': (
+    'videoprism_public_v1_base': (
         'google/videoprism-base-f16r288',
         'flax_base_f16r288_repeated.npz',
     ),
-    'videoprism_public_v1_large_hf': (
+    'videoprism_public_v1_large': (
         'google/videoprism-large-f8r288',
         'flax_large_f8r288_repeated.npz',
     ),
-    'videoprism_lvt_public_v1_base_hf': (
+    'videoprism_lvt_public_v1_base': (
         'google/videoprism-lvt-base-f16r288',
         'flax_lvt_base_f16r288_repeated.npz',
     ),
-    'videoprism_lvt_public_v1_large_hf': (
-        'videoprism-lvt-large-f8r288',
-        'flax_lvt_large_f8r288_repeated.npz',
-    ),
-    # Not recommended; to be deprecated.
-    'videoprism_public_v1_base': (
-        'gs://videoprism/v1/flax_base_f16r288_repeated.npz'
-    ),
-    'videoprism_public_v1_large': (
-        'gs://videoprism/v1/flax_large_f8r288_repeated.npz'
-    ),
-    'videoprism_lvt_public_v1_base': (
-        'gs://videoprism/v1/flax_lvt_base_f16r288_repeated.npz'
-    ),
     'videoprism_lvt_public_v1_large': (
-        'gs://videoprism/v1/flax_lvt_large_f8r288_repeated.npz'
+        'google/videoprism-lvt-large-f8r288',
+        'flax_lvt_large_f8r288_repeated.npz',
     ),
 }
 
@@ -209,16 +195,6 @@ def videoprism_lvt_v1_giant(text_tokenizer: str = 'c4_en'):
 
 
 MODELS = {
-    # Recommended.
-    'videoprism_public_v1_base_hf': videoprism_v1_base,
-    'videoprism_public_v1_large_hf': videoprism_v1_large,
-    'videoprism_lvt_public_v1_base_hf': functools.partial(
-        videoprism_lvt_v1_base, text_tokenizer='c4_en'
-    ),
-    'videoprism_lvt_public_v1_large_hf': functools.partial(
-        videoprism_lvt_v1_large, text_tokenizer='c4_en'
-    ),
-    # Not recommended; to be deprecated.
     'videoprism_public_v1_base': videoprism_v1_base,
     'videoprism_public_v1_large': videoprism_v1_large,
     'videoprism_lvt_public_v1_base': functools.partial(
@@ -274,8 +250,8 @@ def load_pretrained_weights(
   """
   checkpoints = checkpoints or CHECKPOINTS
   checkpoint_path = checkpoint_path or checkpoints.get(model_name)
-  # Handle Hugging Face checkpoints using suffix _hf.
-  if model_name is not None and model_name.endswith('_hf'):
+  # Handle Hugging Face checkpoints.
+  if model_name is not None:
     repo_id, filename = checkpoint_path
     checkpoint_path = huggingface_hub.hf_hub_download(
         repo_id=repo_id, filename=filename
