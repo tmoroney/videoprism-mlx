@@ -57,7 +57,7 @@ TEXT_TOKENIZERS = {
 }
 
 CHECKPOINTS = {
-    # Hugging Face checkpoints (repository, filename)
+    # Hugging Face checkpoints (repository, filename).
     'videoprism_public_v1_base': (
         'google/videoprism-base-f16r288',
         'flax_base_f16r288_repeated.npz',
@@ -206,6 +206,38 @@ MODELS = {
 }
 
 
+def _get_model_name_by_hf_model_id(model_id: str) -> str | None:
+  """Returns model name for the given Hugging Face model ID.
+
+  Hugging Face model ID is typically the name of the repository, e.g.,
+  `google/videoprism-base-f16r288`.
+
+  Args:
+    model_id: A string for the Hugging Face model ID.
+
+  Returns:
+    The model name for the given Hugging Face model ID or None if not found.
+  """
+  for model_name, value in CHECKPOINTS.items():
+    if isinstance(value, tuple) and value[0] == model_id:
+      return model_name
+
+  return None
+
+
+def has_model(
+    model_name: str,
+    models: Mapping[str, Callable[[], nn.Module]] | None = None,
+) -> bool:
+  """Returns whether the model is available."""
+  models = models or MODELS
+  if model_name.startswith('google/'):
+    # Handle Hugging Face model ID.
+    model_name = _get_model_name_by_hf_model_id(model_name)
+
+  return model_name is not None and model_name in models
+
+
 def get_model(
     model_name: str | None,
     model_fn: Callable[[], nn.Module] | None = None,
@@ -214,7 +246,7 @@ def get_model(
   """Returns VideoPrism model with the given name.
 
   Args:
-    model_name: A string for the model name.
+    model_name: A string for the model name or Hugging Face model ID.
     model_fn: Optional function that returns the model.
     models: Mapping from model name to model creation function. Used with
       `model_name`. If None, use the default `MODELS`.
@@ -222,8 +254,16 @@ def get_model(
   Returns:
     A Flax VideoPrism model.
   """
+
   if model_fn is None:
+    assert model_name is not None
     models = models or MODELS
+    if model_name.startswith('google/'):
+      # Handle Hugging Face model ID.
+      model_name = _get_model_name_by_hf_model_id(model_name)
+      if model_name is None:
+        raise ValueError(f'Failed to find model name with `{model_name}`.')
+
     if model_name not in models:
       raise ValueError(f'Model `{model_name}` not found.')
 
@@ -235,12 +275,12 @@ def get_model(
 def load_pretrained_weights(
     model_name: str | None,
     checkpoint_path: str | None = None,
-    checkpoints: Mapping[str, str] | None = None,
+    checkpoints: Mapping[str, str | tuple[str, str]] | None = None,
 ):
-  """Loads pretrained model weight from Google Cloud storage or HuggingFace.
+  """Loads pretrained model weights.
 
   Args:
-    model_name: A string for the model name.
+    model_name: A string for the model name or Hugging Face model ID.
     checkpoint_path: Optional path of the model checkpoint.
     checkpoints: Mapping from model name to checkpoint path. Used with
       `model_name`. If None, use the default `CHECKPOINTS`.
@@ -249,13 +289,18 @@ def load_pretrained_weights(
     Restored Flax model weights.
   """
   checkpoints = checkpoints or CHECKPOINTS
-  checkpoint_path = checkpoint_path or checkpoints.get(model_name)
-  # Handle Hugging Face checkpoints.
-  if model_name is not None:
-    repo_id, filename = checkpoint_path
+
+  if checkpoint_path is None:
+    assert model_name is not None
+    if model_name.startswith('google/'):
+      # Handle Hugging Face model ID.
+      model_name = _get_model_name_by_hf_model_id(model_name)
+
+    repo_id, filename = checkpoints[model_name]
     checkpoint_path = huggingface_hub.hf_hub_download(
         repo_id=repo_id, filename=filename
     )
+
   variables = utils.load_checkpoint(checkpoint_path)
   return jax.tree_util.tree_map(jnp.asarray, variables)
 

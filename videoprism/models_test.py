@@ -25,6 +25,14 @@ from videoprism import tokenizers
 
 class ModelsTest(parameterized.TestCase):
 
+  @parameterized.parameters(
+      ('videoprism_public_v1_base', True),
+      ('videoprism_public_v1_large', True),
+      ('videoprism_public_v1_giant', False),
+  )
+  def test_has_model(self, model_name, exists):
+    self.assertEqual(models.has_model(model_name), exists)
+
   @parameterized.parameters(8, 16)
   def test_videoprism(self, num_frames):
     batch_size = 1
