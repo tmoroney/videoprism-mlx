@@ -545,19 +545,39 @@ class FactorizedVideoClassifier(nn.Module):
   num_classes: int
 
   @nn.compact
-  def __call__(self, inputs: Array, train: bool = False):
+  def __call__(
+      self,
+      inputs: Array,
+      train: bool = False,
+      return_intermediate: bool = False,
+      frame_paddings: Array | None = None,
+  ):
     """Applies video classifier to inputs.
 
     Args:
       inputs: Input tensor of shape [B, T, H, W, 3].
       train: Whether the model is in the training mode.
+      return_intermediate: If intermediate features are returned.
+      frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
+        1 denotes padding frame.
 
     Returns:
-      Output tensor of shape [B, num_classes].
+      logits: Output tensor of shape [B, num_classes].
+      outputs: A dictionary of additional outputs, including `spatial_features`
+        of shape [B, T * N, D] and `spatiotemporal_features` of shape [B, T * N,
+        D]. Empty if `return_intermediate` is False.
     """
-    features, _ = FactorizedEncoder(name='encoder', **self.encoder_params)(
-        inputs, train=train
+    features, outputs = FactorizedEncoder(
+        name='encoder', **self.encoder_params
+    )(
+        inputs,
+        train=train,
+        return_intermediate=return_intermediate,
+        frame_paddings=frame_paddings,
     )
+    if return_intermediate:
+      outputs['spatiotemporal_features'] = features
+
     embeddings = layers.AttenTokenPoolingLayer(
         name='atten_pooler',
         num_heads=self.encoder_params['num_heads'],
@@ -570,7 +590,7 @@ class FactorizedVideoClassifier(nn.Module):
         output_dim=self.num_classes,
         activation_fn=layers.identity,
     )(embeddings)
-    return logits
+    return logits, outputs
 
 
 class TextEncoder(nn.Module):

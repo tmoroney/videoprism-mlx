@@ -181,7 +181,13 @@ class EncodersTest(parameterized.TestCase):
       self.assertEmpty(outputs)
 
   @chex.variants(with_jit=True)
-  def test_factorized_video_classifier(self):
+  @parameterized.named_parameters(
+      ('train', True, False),
+      ('return_intermediate', False, True),
+  )
+  def test_factorized_video_classifier(
+      self, train: bool, return_intermediate: bool
+  ):
     batch_size, num_frames, image_size, patch_size, dim = 1, 4, 16, 4, 8
     np_inputs = np.random.normal(
         0.0,
@@ -210,11 +216,24 @@ class EncodersTest(parameterized.TestCase):
 
     @self.variant
     def var_fn():
-      return classifier.init_with_output(prng_key, inputs, train=False)
+      return classifier.init_with_output(
+          prng_key, inputs, train=train, return_intermediate=return_intermediate
+      )
 
-    logits, params = var_fn()
+    (logits, outputs), params = var_fn()
     self.assertLen(jax.tree_util.tree_flatten(params)[0], 54)
     self.assertEqual(logits.shape, (batch_size, 10))
+    if return_intermediate:
+      self.assertEqual(
+          outputs['spatial_features'].shape,
+          (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
+      )
+      self.assertEqual(
+          outputs['spatiotemporal_features'].shape,
+          (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
+      )
+    else:
+      self.assertEmpty(outputs)
 
   @chex.variants(with_jit=True)
   @parameterized.named_parameters(
