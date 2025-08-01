@@ -232,6 +232,7 @@ class EncodersTest(parameterized.TestCase):
           outputs['spatiotemporal_features'].shape,
           (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
       )
+      self.assertEqual(outputs['global_embeddings'].shape, (batch_size, dim))
     else:
       self.assertEmpty(outputs)
 

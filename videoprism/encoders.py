@@ -564,8 +564,9 @@ class FactorizedVideoClassifier(nn.Module):
     Returns:
       logits: Output tensor of shape [B, num_classes].
       outputs: A dictionary of additional outputs, including `spatial_features`
-        of shape [B, T * N, D] and `spatiotemporal_features` of shape [B, T * N,
-        D]. Empty if `return_intermediate` is False.
+        of shape [B, T * N, D], `spatiotemporal_features` of shape [B, T * N,
+        D], and `global_embeddings` of shape [B, D]. Empty if
+        `return_intermediate` is False.
     """
     features, outputs = FactorizedEncoder(
         name='encoder', **self.encoder_params
@@ -585,6 +586,9 @@ class FactorizedVideoClassifier(nn.Module):
         num_queries=1,
     )(features, paddings=None, train=train)
     embeddings = jnp.squeeze(embeddings, axis=-2)
+    if return_intermediate:
+      outputs['global_embeddings'] = embeddings
+
     logits = layers.FeedForward(
         name='projection',
         output_dim=self.num_classes,
