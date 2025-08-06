@@ -194,6 +194,22 @@ def videoprism_lvt_v1_giant(text_tokenizer: str = 'c4_en'):
   return encoders.FactorizedVideoCLIP(**config)
 
 
+def videoprism_vc_v1_base(num_classes: int):
+  """Builds VideoPrism Classification v1 base model."""
+  encoder_params = CONFIGS['videoprism_v1_base']
+  return encoders.FactorizedVideoClassifier(
+      encoder_params=encoder_params, num_classes=num_classes
+  )
+
+
+def videoprism_vc_v1_giant(num_classes: int):
+  """Builds VideoPrism Classification v1 giant model."""
+  encoder_params = CONFIGS['videoprism_v1_giant']
+  return encoders.FactorizedVideoClassifier(
+      encoder_params=encoder_params, num_classes=num_classes
+  )
+
+
 MODELS = {
     'videoprism_public_v1_base': videoprism_v1_base,
     'videoprism_public_v1_large': videoprism_v1_large,
