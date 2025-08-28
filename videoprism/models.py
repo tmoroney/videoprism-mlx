@@ -202,6 +202,14 @@ def videoprism_vc_v1_base(num_classes: int):
   )
 
 
+def videoprism_vc_v1_large(num_classes: int):
+  """Builds VideoPrism Classification v1 large model."""
+  encoder_params = CONFIGS['videoprism_v1_large']
+  return encoders.FactorizedVideoClassifier(
+      encoder_params=encoder_params, num_classes=num_classes
+  )
+
+
 def videoprism_vc_v1_giant(num_classes: int):
   """Builds VideoPrism Classification v1 giant model."""
   encoder_params = CONFIGS['videoprism_v1_giant']
