@@ -397,4 +397,4 @@ def tokenize_texts(
     batch_ids.append(ids)
     batch_paddings.append(paddings)
 
-  return np.stack(batch_ids), np.stack(batch_paddings)
+  return np.asarray(batch_ids), np.asarray(batch_paddings)
