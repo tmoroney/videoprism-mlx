@@ -15,6 +15,7 @@
 """Modules for video encoders."""
 
 from collections.abc import Sequence
+import dataclasses
 import math
 from typing import Any
 
@@ -45,8 +46,11 @@ def _l2_normalize(
   Returns:
     Normalized jax.Array.
   """
+  x_dtype = x.dtype
+  # Always convert embed to float32 for all precisions.
+  x = x.astype(jnp.float32)
   norm = jnp.sqrt(jnp.sum(x * x, axis=axis, keepdims=True) + epsilon)
-  return x / norm
+  return (x / norm).astype(x_dtype)
 
 
 def _image_to_patch(inputs: Array, patch_size: int) -> Array:
@@ -147,7 +151,7 @@ def _interpolate_emb_2d(
   return target_emb
 
 
-class Embedding(nn.Module):
+class Embedding(layers.Module):
   """A simple embedding layer that performs embedding lookups from ids.
 
   Attributes:
@@ -178,15 +182,20 @@ class Embedding(nn.Module):
     Returns:
       A jax.Array of shape [..., input_dim].
     """
-    emb_var = self.param(
-        'emb_var',
-        nn.initializers.normal(stddev=1.0 / math.sqrt(self.input_dim)),
-        [self.num_classes, self.input_dim],
+    emb_var = self._cast_to_fprop_dtype(
+        self.param(
+            'emb_var',
+            nn.initializers.normal(stddev=1.0 / math.sqrt(self.input_dim)),
+            [self.num_classes, self.input_dim],
+            self.dtype,
+        )
     )
     if self.lookup_style == 'index':
       embs = jnp.asarray(emb_var)[(ids,)]
     elif self.lookup_style == 'matmul':
-      one_hot_ids = jax.nn.one_hot(ids, self.num_classes, dtype=jnp.float32)
+      one_hot_ids = jax.nn.one_hot(
+          ids, self.num_classes, dtype=self.fprop_dtype
+      )
       embs = jnp.einsum('...y,yz->...z', one_hot_ids, emb_var)
     else:
       raise ValueError(f'Unknown lookup style: `{self.lookup_style}`.')
@@ -201,7 +210,7 @@ class Embedding(nn.Module):
     return embs
 
 
-class PositionalEmbedding(nn.Module):
+class PositionalEmbedding(layers.Module):
   """Generates position embedding for a given 1-d sequence.
 
   Attributes:
@@ -237,13 +246,13 @@ class PositionalEmbedding(nn.Module):
     )
     embs = jnp.concatenate(
         [jnp.sin(scaled_time), jnp.cos(scaled_time)], axis=-1
-    )
+    ).astype(self.fprop_dtype)
     # Force usage of `np` to compute static values at trace time.
     embs = jnp.pad(embs, [[0, 0], [0, 0], [0, np.mod(self.embedding_dim, 2)]])
     return embs
 
 
-class TrainablePositionalEmbedding(nn.Module):
+class TrainablePositionalEmbedding(layers.Module):
   """Generates trainable position embedding for a given 1-d sequence.
 
   Attributes:
@@ -267,21 +276,24 @@ class TrainablePositionalEmbedding(nn.Module):
       A jax.Array of shape [1, seq_length, embedding_dim].
     """
     position = jnp.arange(seq_length, dtype=jnp.int32)[jnp.newaxis, :]
-    pos_emb_var = self.param(
-        'emb_var',
-        default_kernel_init,
-        [self.max_seq_length, self.embedding_dim],
+    pos_emb_var = self._cast_to_fprop_dtype(
+        self.param(
+            'emb_var',
+            default_kernel_init,
+            [self.max_seq_length, self.embedding_dim],
+            self.dtype,
+        )
     )
     pos_emb_var = jax.lax.slice_in_dim(pos_emb_var, 0, seq_length, axis=0)
     if self.lookup_style == 'matmul':
-      one_hot_ids = jax.nn.one_hot(position, seq_length, dtype=jnp.float32)
+      one_hot_ids = jax.nn.one_hot(position, seq_length, dtype=self.fprop_dtype)
       embs = jnp.einsum('...y,yz->...z', one_hot_ids, pos_emb_var)
     else:
       raise ValueError(f'Unknown lookup style: `{self.lookup_style}`.')
     return embs
 
 
-class VisionTransformer(nn.Module):
+class VisionTransformer(layers.Module):
   """Vision transformer model.
 
   This class follows a minimalistic design pattern. Users need to configure the
@@ -356,11 +368,13 @@ class VisionTransformer(nn.Module):
         activation_fn=layers.gelu,
         enable_causal_atten=False,
         scan=self.scan,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(features, paddings, train=train)
     return features
 
 
-class FactorizedEncoder(nn.Module):
+class FactorizedEncoder(layers.Module):
   """Factorized encoder from the paper `ViViT: A Video Vision Transformer`.
 
   This is an implementation of model-2 in the paper. It applies ViT model for
@@ -457,6 +471,8 @@ class FactorizedEncoder(nn.Module):
         name='patch_projection',
         output_dim=self.model_dim,
         activation_fn=layers.identity,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(patches)
 
     # Add spatial positional encoding.
@@ -466,6 +482,8 @@ class FactorizedEncoder(nn.Module):
         name='spatial_pos_emb',
         embedding_dim=self.model_dim,
         max_seq_length=spatial_seq_length,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(seq_length=spatial_seq_length)
     num_row_patches = h // self.patch_size
     num_col_patches = w // self.patch_size
@@ -486,8 +504,12 @@ class FactorizedEncoder(nn.Module):
         atten_logit_cap=self.atten_logit_cap,
         norm_policy=self.norm_policy,
         scan=self.scan,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(patches, train=train, paddings=patches_paddings)
-    features = layers.LayerNorm(name='spatial_ln')(features)
+    features = layers.LayerNorm(
+        name='spatial_ln', dtype=self.dtype, fprop_dtype=self.fprop_dtype
+    )(features)
     spatial_features = features
 
     # Instead of mean pooling, we keep the spatial tokens.
@@ -505,6 +527,8 @@ class FactorizedEncoder(nn.Module):
         name='temporal_pos_emb',
         embedding_dim=self.model_dim,
         max_seq_length=temporal_seq_length,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(seq_length=temporal_seq_length)
     if temporal_seq_length != t:
       temporal_pos_emb = _interpolate_emb_1d(temporal_pos_emb, t)
@@ -519,8 +543,12 @@ class FactorizedEncoder(nn.Module):
         atten_logit_cap=self.atten_logit_cap,
         norm_policy=self.norm_policy,
         scan=self.scan,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(features, train=train, paddings=temporal_paddings)
-    features = layers.LayerNorm(name='temporal_ln')(features)
+    features = layers.LayerNorm(
+        name='temporal_ln', dtype=self.dtype, fprop_dtype=self.fprop_dtype
+    )(features)
     features = einshape.jax_einshape(  # (B, T * N, D).
         '(bn)td->b(tn)d', features, b=b
     )
@@ -533,7 +561,7 @@ class FactorizedEncoder(nn.Module):
     return embeddings, outputs
 
 
-class FactorizedVideoClassifier(nn.Module):
+class FactorizedVideoClassifier(layers.Module):
   """Video classifier with `FactorizedEncoder` backbone.
 
   Attributes:
@@ -541,8 +569,8 @@ class FactorizedVideoClassifier(nn.Module):
     num_classes: Number of output classes.
   """
 
-  encoder_params: dict[str, Any]
-  num_classes: int
+  encoder_params: dict[str, Any] = dataclasses.field(default_factory=dict)
+  num_classes: int = 0
 
   @nn.compact
   def __call__(
@@ -569,7 +597,10 @@ class FactorizedVideoClassifier(nn.Module):
         `return_intermediate` is False.
     """
     features, outputs = FactorizedEncoder(
-        name='encoder', **self.encoder_params
+        name='encoder',
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
+        **self.encoder_params,
     )(
         inputs,
         train=train,
@@ -584,6 +615,8 @@ class FactorizedVideoClassifier(nn.Module):
         num_heads=self.encoder_params['num_heads'],
         hidden_dim=self.encoder_params['model_dim'],
         num_queries=1,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(features, paddings=None, train=train)
     embeddings = jnp.squeeze(embeddings, axis=-2)
     if return_intermediate:
@@ -593,11 +626,13 @@ class FactorizedVideoClassifier(nn.Module):
         name='projection',
         output_dim=self.num_classes,
         activation_fn=layers.identity,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(embeddings)
     return logits, outputs
 
 
-class TextEncoder(nn.Module):
+class TextEncoder(layers.Module):
   """CoCa-style text encoder.
 
   Reference: https://arxiv.org/abs/2205.01917
@@ -652,20 +687,27 @@ class TextEncoder(nn.Module):
     pos_emb = PositionalEmbedding(
         name='pos_emb',
         embedding_dim=self.model_dim,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(seq_length=seq_length)
     input_emb = Embedding(
         name='token_emb',
         num_classes=self.vocabulary_size,
         input_dim=self.model_dim,
         scale_sqrt_depth=True,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(inputs)
     features = input_emb + pos_emb
 
     if self.num_class_tokens > 0:
-      cls_emb = self.param(
-          'cls_emb',
-          nn.initializers.normal(stddev=1.0 / math.sqrt(self.model_dim)),
-          [1, self.num_class_tokens, self.model_dim],
+      cls_emb = self._cast_to_fprop_dtype(
+          self.param(
+              'cls_emb',
+              nn.initializers.normal(stddev=1.0 / math.sqrt(self.model_dim)),
+              [1, self.num_class_tokens, self.model_dim],
+              self.dtype,
+          )
       )
       cls_emb = jnp.tile(cls_emb, [batch_size, 1, 1])
       cls_emb *= self.model_dim**0.5
@@ -687,12 +729,16 @@ class TextEncoder(nn.Module):
         activation_fn=jax.nn.relu,
         enable_causal_atten=self.enable_causal_atten,
         scan=self.scan,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(features, paddings, train=train)
-    features = layers.LayerNorm(name='unimodal_ln')(features)
+    features = layers.LayerNorm(
+        name='unimodal_ln', dtype=self.dtype, fprop_dtype=self.fprop_dtype
+    )(features)
     return features
 
 
-class FactorizedVideoCLIP(nn.Module):
+class FactorizedVideoCLIP(layers.Module):
   """Video CLIP model with a factorized vision encoder."""
 
   # Vision parameters.
@@ -728,7 +774,7 @@ class FactorizedVideoCLIP(nn.Module):
 
     Args:
       inputs: Input frame image tensor of shape [B, T, H, W, 3] (H == W).
-      text_token_ids: Input text token id tensor of shape [B, L, D].
+      text_token_ids: Input text token id tensor of shape [B, L].
       text_paddings: Input text paddings of shape [B, L]. Required if
         `text_token_ids` is not None.
       train: If the model is in the train mode.
@@ -763,6 +809,8 @@ class FactorizedVideoCLIP(nn.Module):
           atten_logit_cap=self.atten_logit_cap,
           norm_policy='pre',
           scan=self.scan,
+          dtype=self.dtype,
+          fprop_dtype=self.fprop_dtype,
       )(
           inputs,
           train=train,
@@ -782,6 +830,8 @@ class FactorizedVideoCLIP(nn.Module):
             atten_logit_cap=self.atten_logit_cap,
             norm_policy='pre',
             scan=self.scan,
+            dtype=self.dtype,
+            fprop_dtype=self.fprop_dtype,
         )(vision_features, train=train)
 
       pooling_layer = layers.AttenTokenPoolingLayer(
@@ -789,6 +839,8 @@ class FactorizedVideoCLIP(nn.Module):
           hidden_dim=self.model_dim * 4,
           num_heads=self.num_heads,
           num_queries=1,
+          dtype=self.dtype,
+          fprop_dtype=self.fprop_dtype,
       )
       video_embeddings = pooling_layer(vision_features, None, train=train)
 
@@ -824,6 +876,8 @@ class FactorizedVideoCLIP(nn.Module):
           atten_logit_cap=self.atten_logit_cap,
           norm_policy=self.norm_policy,
           scan=self.scan,
+          dtype=self.dtype,
+          fprop_dtype=self.fprop_dtype,
       )(text_token_ids, text_paddings, train=train)
 
       # Take the last token (i.e., class token) as the text embedding.

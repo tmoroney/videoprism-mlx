@@ -179,7 +179,33 @@ def compute_attention_masks_for_fprop(
   return attention_mask
 
 
-class LayerNorm(nn.Module):
+class Module(nn.Module):
+  """Base class for layers with dtype configured.
+
+  Attributes:
+    dtype: Default dtype for all variables.
+    fprop_dtype: Activations dtype to use.
+  """
+
+  dtype: jnp.dtype = jnp.float32
+  fprop_dtype: jnp.dtype = jnp.float32
+
+  @nn.nowrap
+  def _cast_to_fprop_dtype(self, value: Any) -> Any:
+    """Casts values to the desired dtype."""
+
+    def _cast(x):
+      if x is None:
+        return None
+      if self.fprop_dtype != x.dtype:
+        if jnp.issubdtype(x.dtype, jnp.floating):
+          return x.astype(self.fprop_dtype)
+      return x
+
+    return jax.tree_util.tree_map(_cast, value)
+
+
+class LayerNorm(Module):
   """Layer normalization.
 
   Attributes:
@@ -220,19 +246,31 @@ class LayerNorm(nn.Module):
     input_dim = inputs.shape[-1]
     if self.use_scale:
       init_value = 1.0 if self.direct_scale else 0.0
-      scale = self.param(
-          'scale', nn.initializers.constant(init_value), [input_dim]
+      scale = self._cast_to_fprop_dtype(
+          self.param(
+              'scale',
+              nn.initializers.constant(init_value),
+              [input_dim],
+              self.dtype,
+          )
       )
       if not self.direct_scale:
         scale += 1.0
       normed_inputs *= scale
     if self.use_bias:
-      bias = self.param('bias', nn.initializers.zeros_init(), [input_dim])
+      bias = self._cast_to_fprop_dtype(
+          self.param(
+              'bias',
+              nn.initializers.zeros_init(),
+              [input_dim],
+              self.dtype,
+          )
+      )
       normed_inputs += bias
     return normed_inputs
 
 
-class FeedForward(nn.Module):
+class FeedForward(Module):
   """Feedforward layer with activation.
 
   Attributes:
@@ -251,17 +289,31 @@ class FeedForward(nn.Module):
 
   @nn.compact
   def __call__(self, inputs: Array) -> Array:
+
+    def _promote_dtype(x, kernel, bias, dtype):
+      """Promotes the dtype of the arrays to the desired dtype."""
+      del dtype
+      # To be compatible with other layers, we do not promote the inputs as they
+      # are expected to be in the `fprop_dtype`.
+      return (
+          x,
+          self._cast_to_fprop_dtype(kernel),
+          self._cast_to_fprop_dtype(bias),
+      )
+
     projected_inputs = nn.Dense(
         self.output_dim,
         use_bias=self.has_bias,
         kernel_init=self.weight_init,
         bias_init=self.bias_init,
         name='linear',
+        param_dtype=self.dtype,
+        promote_dtype=_promote_dtype,
     )(inputs)
     return self.activation_fn(projected_inputs)
 
 
-class TransformerFeedForward(nn.Module):
+class TransformerFeedForward(Module):
   """Transformer feedforward layer with residual connection and dropout.
 
   Attributes:
@@ -291,19 +343,28 @@ class TransformerFeedForward(nn.Module):
   residual_weight: float = 1.0
   norm_policy: str = 'pre'
 
-  def _ln(self, name: str) -> LayerNorm:
-    """Builds a LayerNorm module."""
-    return LayerNorm(name=name, use_bias=self.has_bias)
+  @nn.nowrap
+  def _make_ln(self, name: str) -> LayerNorm:
+    """Makes a LayerNorm module."""
+    return LayerNorm(
+        name=name,
+        use_bias=self.has_bias,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
+    )
 
-  def _ffn(
+  @nn.nowrap
+  def _make_ffn(
       self, output_dim: int, name: str, skip_activation: bool = False
   ) -> FeedForward:
-    """Builds a FeedForward module."""
+    """Makes a FeedForward module."""
     return FeedForward(
         name=name,
         output_dim=output_dim,
         has_bias=self.has_bias,
         activation_fn=identity if skip_activation else self.activation_fn,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )
 
   @nn.compact
@@ -325,12 +386,12 @@ class TransformerFeedForward(nn.Module):
       paddings = jnp.expand_dims(paddings, axis=-1)
 
     if self.norm_policy == 'primer_hybrid':
-      inputs = self._ln(name='pre_layer_norm')(inputs)
+      inputs = self._make_ln(name='pre_layer_norm')(inputs)
     elif self.norm_policy == 'pre':
-      inputs = self._ln(name='layer_norm')(inputs)
+      inputs = self._make_ln(name='layer_norm')(inputs)
 
     # Apply first FFN layer.
-    activations = self._ffn(self.hidden_dim, name='ffn_layer1')(inputs)
+    activations = self._make_ffn(self.hidden_dim, name='ffn_layer1')(inputs)
 
     # Apply paddings if not None.
     if paddings is not None:
@@ -341,9 +402,9 @@ class TransformerFeedForward(nn.Module):
         activations, deterministic=not train
     )
     # Apply second FFN layer.
-    outputs = self._ffn(output_dim, name='ffn_layer2', skip_activation=True)(
-        activations
-    )
+    outputs = self._make_ffn(
+        output_dim, name='ffn_layer2', skip_activation=True
+    )(activations)
 
     # Apply paddings if not None.
     if paddings is not None:
@@ -351,9 +412,9 @@ class TransformerFeedForward(nn.Module):
 
     # Apply Primer normalization before dropout.
     if self.norm_policy == 'primer_hybrid':
-      outputs = self._ln(name='post_layer_norm')(outputs)
+      outputs = self._make_ln(name='post_layer_norm')(outputs)
     elif self.norm_policy == 'post':
-      outputs = self._ln(name='layer_norm')(outputs)
+      outputs = self._make_ln(name='layer_norm')(outputs)
 
     # Apply residual dropout.
     outputs = nn.Dropout(self.residual_dropout_prob, name='residual_dropout')(
@@ -364,12 +425,12 @@ class TransformerFeedForward(nn.Module):
       outputs = residual + outputs * self.residual_weight
 
     if self.norm_policy == 'post_skip':
-      outputs = self._ln(name='layer_norm')(outputs)
+      outputs = self._make_ln(name='layer_norm')(outputs)
 
     return outputs
 
 
-class AttentionProjection(nn.Module):
+class AttentionProjection(Module):
   """Layer that computes multi heads projection.
 
   This layer is expected to be used within DotProductAttention below.
@@ -412,7 +473,9 @@ class AttentionProjection(nn.Module):
 
     hd_shape = [self.num_heads, self.dim_per_head]
     pc_shape = [output_dim] + hd_shape
-    w = self.param('w', default_kernel_init, pc_shape)
+    w = self._cast_to_fprop_dtype(
+        self.param('w', default_kernel_init, pc_shape, self.dtype)
+    )
 
     if self.is_output_projection:
       assert inputs.shape[-2:] == (self.num_heads, self.dim_per_head)
@@ -424,16 +487,19 @@ class AttentionProjection(nn.Module):
 
     ret = jnp.einsum(eqn, inputs, w)
     if self.use_bias:
-      b = self.param(
-          'b',
-          nn.initializers.zeros_init(),
-          [output_dim] if self.is_output_projection else hd_shape,
+      b = self._cast_to_fprop_dtype(
+          self.param(
+              'b',
+              nn.initializers.zeros_init(),
+              [output_dim] if self.is_output_projection else hd_shape,
+              self.dtype,
+          )
       )
       ret += b
     return ret
 
 
-class PerDimScale(nn.Module):
+class PerDimScale(Module):
   """A layer to scale individual dimensions of the input."""
 
   @nn.compact
@@ -447,19 +513,21 @@ class PerDimScale(nn.Module):
       outputs: A jax.Array with shape [..., dim].
     """
     dim = inputs.shape[-1]
-    per_dim_scale = self.param(
-        'per_dim_scale', nn.initializers.zeros_init(), [dim]
+    per_dim_scale = self._cast_to_fprop_dtype(
+        self.param(
+            'per_dim_scale', nn.initializers.zeros_init(), [dim], self.dtype
+        )
     )
 
     # 1.0/jax.nn.softplus(0.0) = 1.442695041. Hard code this number so that we
     # can avoid unnecessary XLA op fusion mess on TPU.
     r_softplus_0 = 1.442695041
-    scale = jnp.array(r_softplus_0 / np.sqrt(dim), dtype=inputs.dtype)
+    scale = jnp.array(r_softplus_0 / np.sqrt(dim), dtype=self.fprop_dtype)
     scale *= jax.nn.softplus(per_dim_scale)
     return inputs * scale
 
 
-class DotProductAttention(nn.Module):
+class DotProductAttention(Module):
   """Dot-product attention with multiple attention heads.
 
   Attributes:
@@ -503,7 +571,9 @@ class DotProductAttention(nn.Module):
     if not self.internal_enable_query_scale:
       return query
     if self.internal_enable_per_dim_scale:
-      query = PerDimScale(name='per_dim_scale')(query)
+      query = PerDimScale(
+          name='per_dim_scale', dtype=self.dtype, fprop_dtype=self.fprop_dtype
+      )(query)
     else:
       if self.scale_query_by_dim_per_head and self.dim_per_head is not None:
         dim_per_head = self.dim_per_head
@@ -517,7 +587,7 @@ class DotProductAttention(nn.Module):
     """Caps the logits by p.atten_logit_cap with tanh, if enabled."""
     if not self.atten_logit_cap or self.atten_logit_cap <= 0.0:
       return logits
-    cap = jnp.array(self.atten_logit_cap, dtype=logits.dtype)
+    cap = jnp.array(self.atten_logit_cap, dtype=self.fprop_dtype)
     # Note that since this caps the negative side as well, caller must defer the
     # pad-with-very-negative-logits logic to after this function returns.
     logits = cap * jnp.tanh(logits / cap)
@@ -581,7 +651,7 @@ class DotProductAttention(nn.Module):
     logits = logits.astype(jnp.float32)
     # Apply attention masking.
     padded_logits = _apply_mask_to_logits(logits, atten_mask)
-    probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
+    probs = jax.nn.softmax(padded_logits, axis=-1).astype(self.fprop_dtype)
     # Apply attention dropout.
     probs = nn.Dropout(self.atten_dropout_prob, name='atten_dropout')(
         probs, deterministic=not train
@@ -590,6 +660,7 @@ class DotProductAttention(nn.Module):
     encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value)
     return encoded, probs
 
+  @nn.nowrap
   def _project_input(self, name: str, dim_per_head: int) -> AttentionProjection:
     """Builds an AttentionProjection module."""
     return AttentionProjection(
@@ -597,11 +668,19 @@ class DotProductAttention(nn.Module):
         num_heads=self.num_heads,
         dim_per_head=dim_per_head,
         use_bias=self.use_bias,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )
 
-  def _ln(self, name: str) -> LayerNorm:
-    """Builds a LayerNorm module."""
-    return LayerNorm(name=name, use_bias=self.use_bias)
+  @nn.nowrap
+  def _make_ln(self, name: str) -> LayerNorm:
+    """Makes a LayerNorm module."""
+    return LayerNorm(
+        name=name,
+        use_bias=self.use_bias,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
+    )
 
   @nn.compact
   def __call__(
@@ -643,8 +722,8 @@ class DotProductAttention(nn.Module):
     value_proj = self._project_input('value', dim_per_head)(value_vec)
 
     if self.use_qk_norm:
-      query_proj = self._ln(name='layer_norm_q')(query_proj)
-      key_proj = self._ln(name='layer_norm_k')(key_proj)
+      query_proj = self._make_ln(name='layer_norm_q')(query_proj)
+      key_proj = self._make_ln(name='layer_norm_k')(key_proj)
 
     encoded, atten_probs = self._dot_atten(
         query_proj, key_proj, value_proj, atten_mask, train=train
@@ -661,11 +740,13 @@ class DotProductAttention(nn.Module):
         dim_per_head=dim_per_head,
         is_output_projection=True,
         use_bias=self.use_bias,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(encoded)
     return encoded, atten_probs
 
 
-class Transformer(nn.Module):
+class Transformer(Module):
   """Transformer layer with multi-headed attention.
 
   Attributes:
@@ -702,9 +783,15 @@ class Transformer(nn.Module):
   internal_enable_per_dim_scale: bool = True
   atten_logit_cap: float = 0.0
 
-  def _ln(self, name: str) -> LayerNorm:
-    """Builds a LayerNorm module."""
-    return LayerNorm(name=name, use_bias=self.use_bias)
+  @nn.nowrap
+  def _make_ln(self, name: str) -> LayerNorm:
+    """Makes a LayerNorm module."""
+    return LayerNorm(
+        name=name,
+        use_bias=self.use_bias,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
+    )
 
   @nn.compact
   def __call__(
@@ -730,9 +817,9 @@ class Transformer(nn.Module):
     """
 
     if self.norm_policy == 'primer_hybrid':
-      inputs_normalized = self._ln(name='pre_layer_norm')(inputs)
+      inputs_normalized = self._make_ln(name='pre_layer_norm')(inputs)
     elif self.norm_policy == 'pre':
-      inputs_normalized = self._ln(name='layer_norm')(inputs)
+      inputs_normalized = self._make_ln(name='layer_norm')(inputs)
     else:
       inputs_normalized = inputs
 
@@ -746,6 +833,8 @@ class Transformer(nn.Module):
         use_bias=self.use_bias,
         internal_enable_per_dim_scale=self.internal_enable_per_dim_scale,
         atten_logit_cap=self.atten_logit_cap,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(
         inputs_normalized,
         inputs_normalized,
@@ -755,9 +844,9 @@ class Transformer(nn.Module):
     )
 
     if self.norm_policy == 'primer_hybrid':
-      atten_outputs = self._ln(name='post_layer_norm')(atten_outputs)
+      atten_outputs = self._make_ln(name='post_layer_norm')(atten_outputs)
     elif self.norm_policy == 'post':
-      atten_outputs = self._ln(name='layer_norm')(atten_outputs)
+      atten_outputs = self._make_ln(name='layer_norm')(atten_outputs)
 
     # Residual dropout and connection.
     atten_outputs = nn.Dropout(
@@ -766,7 +855,7 @@ class Transformer(nn.Module):
     atten_outputs += inputs
 
     if self.norm_policy == 'post_skip':
-      atten_outputs = self._ln(name='layer_norm')(atten_outputs)
+      atten_outputs = self._make_ln(name='layer_norm')(atten_outputs)
 
     # Apply FFN layer.
     outputs = TransformerFeedForward(
@@ -777,6 +866,8 @@ class Transformer(nn.Module):
         residual_dropout_prob=self.residual_dropout_prob,
         relu_dropout_prob=self.relu_dropout_prob,
         norm_policy=self.norm_policy,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(atten_outputs, paddings=paddings, train=train)
     return outputs
 
@@ -846,7 +937,7 @@ class Repeat(nn.Module):
     return outputs
 
 
-class StackedTransformer(nn.Module):
+class StackedTransformer(Module):
   """A stack of Transformer layers.
 
   Attributes:
@@ -934,6 +1025,8 @@ class StackedTransformer(nn.Module):
         activation_fn=self.activation_fn,
         internal_enable_per_dim_scale=self.internal_enable_per_dim_scale,
         atten_logit_cap=self.atten_logit_cap,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )
     if self.scan:
       block_fn = Transformer(name='x_layers', **transformer_kwargs)
@@ -948,7 +1041,7 @@ class StackedTransformer(nn.Module):
     return outputs
 
 
-class AttenTokenPoolingLayer(nn.Module):
+class AttenTokenPoolingLayer(Module):
   """Attentional token pooling layer.
 
   Attributes:
@@ -997,15 +1090,18 @@ class AttenTokenPoolingLayer(nn.Module):
     hidden_dim = self.hidden_dim if self.hidden_dim > 0 else 4 * input_dim
     batch_size, seq_length = tokens.shape[0], tokens.shape[-2]
 
-    query = self.param(
-        'pooling_attention_query',
-        default_kernel_init,
-        [self.num_queries, query_dim],
+    query = self._cast_to_fprop_dtype(
+        self.param(
+            'pooling_attention_query',
+            default_kernel_init,
+            [self.num_queries, query_dim],
+            self.dtype,
+        )
     )
     query = jnp.tile(query[jnp.newaxis, :, :], [batch_size, 1, 1])
 
     if paddings is None:
-      paddings = jnp.zeros([batch_size, seq_length], dtype=query.dtype)
+      paddings = jnp.zeros([batch_size, seq_length], dtype=tokens.dtype)
 
     atten_mask = _convert_paddings_to_mask(paddings, dtype=paddings.dtype)
     outputs, _ = DotProductAttention(
@@ -1015,6 +1111,8 @@ class AttenTokenPoolingLayer(nn.Module):
         use_bias=self.use_bias,
         internal_enable_per_dim_scale=self.internal_enable_per_dim_scale,
         use_qk_norm=self.use_qk_norm,
+        dtype=self.dtype,
+        fprop_dtype=self.fprop_dtype,
     )(
         query,
         tokens,
@@ -1024,7 +1122,11 @@ class AttenTokenPoolingLayer(nn.Module):
     )
 
     if self.add_layer_norm:
-      outputs = LayerNorm(name='pooling_attention_layer_norm')(outputs)
+      outputs = LayerNorm(
+          name='pooling_attention_layer_norm',
+          dtype=self.dtype,
+          fprop_dtype=self.fprop_dtype,
+      )(outputs)
 
     if self.dropout_prob > 0.0:
       outputs = nn.Dropout(self.dropout_prob, name='attention_dropout')(

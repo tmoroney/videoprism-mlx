@@ -173,7 +173,7 @@ class LayersTest(parameterized.TestCase):
     @self.variant
     def var_fn():
       return mha.init_with_output(
-          prng_key, key_vec, query_vec, value_vec, atten_mask, train=train
+          prng_key, query_vec, key_vec, value_vec, atten_mask, train=train
       )
 
     (outputs, probs), params = var_fn()
