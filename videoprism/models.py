@@ -266,6 +266,7 @@ def get_model(
     model_name: str | None,
     model_fn: Callable[[], nn.Module] | None = None,
     models: Mapping[str, Callable[[], nn.Module]] | None = None,
+    fprop_dtype: jnp.dtype | None = None,
 ):
   """Returns VideoPrism model with the given name.
 
@@ -293,7 +294,10 @@ def get_model(
 
     model_fn = models[model_name]
 
-  return model_fn()
+  model = model_fn()
+  if fprop_dtype is not None:
+    model.fprop_dtype = fprop_dtype
+  return model
 
 
 def load_pretrained_weights(
