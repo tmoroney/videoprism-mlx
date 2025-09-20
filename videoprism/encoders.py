@@ -14,7 +14,7 @@
 
 """Modules for video encoders."""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 import dataclasses
 import math
 from typing import Any
@@ -31,6 +31,20 @@ Array = jax.Array
 Variables = nn.module.VariableDict
 
 default_kernel_init = layers.default_kernel_init
+
+
+def _contains(collection: Collection[str] | bool, key: str) -> bool:
+  """Checks if a collection contains a key.
+
+  Args:
+    collection: A collection of strings or a boolean value.
+    key: A string key to check.
+
+  Returns:
+    True if the collection contains the key, or if the collection is a True
+    boolean. False otherwise.
+  """
+  return collection if isinstance(collection, bool) else key in collection
 
 
 def _l2_normalize(
@@ -398,7 +412,7 @@ class FactorizedEncoder(layers.Module):
       self,
       inputs: Array,
       train: bool = False,
-      return_intermediate: bool = False,
+      return_intermediate: bool | Collection[str] = False,
       frame_paddings: Array | None = None,
   ) -> tuple[Array, dict[str, Array]]:
     """Computes predictions for batched inputs.
@@ -406,14 +420,16 @@ class FactorizedEncoder(layers.Module):
     Args:
       inputs: Input image tensor of shape [B, T, H, W, 3] (H == W).
       train: If the model is in the train mode.
-      return_intermediate: If intermediate features are returned.
+      return_intermediate: A boolean for whether all intermediate features are
+        returned, or a container of intermediate feature names to return.
       frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
         1 denotes padding frame.
 
     Returns:
       embeddings: Output tensor for video embeddings of shape [B, T * N, D].
       outputs: A dictionary of additional outputs, including `spatial_features`
-        (shape = [B, T * N, D]). Empty if `return_intermediate` is False.
+        (shape = [B, T * N, D]). Empty if `return_intermediate` is False or does
+        not contain 'spatial_features'.
     """
     b, t, h, w, c = inputs.shape
     assert h == w
@@ -445,7 +461,7 @@ class FactorizedEncoder(layers.Module):
       patches: Array,
       image_shape: tuple[int, int, int],
       train: bool = False,
-      return_intermediate: bool = False,
+      return_intermediate: bool | Collection[str] = False,
       patches_paddings: Array | None = None,
   ) -> tuple[Array, dict[str, Array]]:
     """Computes predictions for patches.
@@ -454,7 +470,8 @@ class FactorizedEncoder(layers.Module):
       patches: Input patches tensor of shape [B * T, (H * W / P^2), P^2 * C].
       image_shape: Original image shape (T, H, W).
       train: If the model is in the train mode.
-      return_intermediate: If intermediate features are also returned.
+      return_intermediate: A boolean for whether all intermediate features are
+        returned, or a collection of intermediate feature names to return.
       patches_paddings: Optional binary tensor of shape [B * T, (H * W / P^2)]
         indicating padding. 1 denotes padded patch.
 
@@ -462,7 +479,8 @@ class FactorizedEncoder(layers.Module):
       embeddings: Output tensor for video embedding sequence of shape [B, T * N,
         D].
       outputs: A dictionary of additional outputs, including `spatial_features`
-        of shape [B, T * N, D]. Empty if `return_intermediate` is False.
+        of shape [B, T * N, D]. Empty if `return_intermediate` is False or does
+        not contain 'spatial_features'.
     """
     t, h, w = image_shape
     b = patches.shape[0] // t
@@ -554,10 +572,11 @@ class FactorizedEncoder(layers.Module):
     )
 
     embeddings, outputs = features, {}
-    if return_intermediate:
+    if _contains(return_intermediate, 'spatial_features'):
       outputs['spatial_features'] = einshape.jax_einshape(
           '(bt)nd->b(tn)d', spatial_features, t=t
       )
+
     return embeddings, outputs
 
 
@@ -577,7 +596,7 @@ class FactorizedVideoClassifier(layers.Module):
       self,
       inputs: Array,
       train: bool = False,
-      return_intermediate: bool = False,
+      return_intermediate: bool | Collection[str] = False,
       frame_paddings: Array | None = None,
   ):
     """Applies video classifier to inputs.
@@ -585,7 +604,8 @@ class FactorizedVideoClassifier(layers.Module):
     Args:
       inputs: Input tensor of shape [B, T, H, W, 3].
       train: Whether the model is in the training mode.
-      return_intermediate: If intermediate features are returned.
+      return_intermediate: A boolean for whether all intermediate features are
+        returned, or a collection of intermediate feature names to return.
       frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
         1 denotes padding frame.
 
@@ -607,7 +627,7 @@ class FactorizedVideoClassifier(layers.Module):
         return_intermediate=return_intermediate,
         frame_paddings=frame_paddings,
     )
-    if return_intermediate:
+    if _contains(return_intermediate, 'spatiotemporal_features'):
       outputs['spatiotemporal_features'] = features
 
     embeddings = layers.AttenTokenPoolingLayer(
@@ -619,7 +639,8 @@ class FactorizedVideoClassifier(layers.Module):
         fprop_dtype=self.fprop_dtype,
     )(features, paddings=None, train=train)
     embeddings = jnp.squeeze(embeddings, axis=-2)
-    if return_intermediate:
+
+    if _contains(return_intermediate, 'global_embeddings'):
       outputs['global_embeddings'] = embeddings
 
     logits = layers.FeedForward(
@@ -767,7 +788,7 @@ class FactorizedVideoCLIP(layers.Module):
       text_paddings: Array | None = None,
       train: bool = False,
       normalize: bool = True,
-      return_intermediate: bool = False,
+      return_intermediate: bool | Collection[str] = False,
       frame_paddings: Array | None = None,
   ) -> tuple[Array | None, Array | None, dict[str, Array]]:
     """Computes predictions for `input_batch`.
@@ -779,7 +800,8 @@ class FactorizedVideoCLIP(layers.Module):
         `text_token_ids` is not None.
       train: If the model is in the train mode.
       normalize: Whether to normalize the output embeddings.
-      return_intermediate: If intermediate features are returned.
+      return_intermediate: A boolean for whether all intermediate features are
+        returned, or a collection of intermediate feature names to return.
       frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
         1 denotes padding frame.
 
@@ -791,7 +813,7 @@ class FactorizedVideoCLIP(layers.Module):
       outputs: A dictionary of additional outputs, including `spatial_features`
         of shape [B, T * N, D], `spatiotemporal_features` of shape [B, T * N,
         D], and `frame_embeddings` of shape [B, T, D]. Empty if
-        `return_intermediate` is False.
+        `return_intermediate` is False or does not contain `spatial_features`.
     """
     video_embeddings, text_embeddings, outputs = None, None, {}
 
@@ -818,7 +840,7 @@ class FactorizedVideoCLIP(layers.Module):
           frame_paddings=frame_paddings,
       )
       outputs.update(vision_outputs)
-      if return_intermediate:
+      if _contains(return_intermediate, 'spatiotemporal_features'):
         outputs['spatiotemporal_features'] = vision_features
 
       if self.num_auxiliary_layers > 0:
@@ -849,7 +871,7 @@ class FactorizedVideoCLIP(layers.Module):
       if normalize:
         video_embeddings = _l2_normalize(video_embeddings, axis=-1)
 
-      if return_intermediate:
+      if _contains(return_intermediate, 'frame_embeddings'):
         frame_features = einshape.jax_einshape(
             'b(tn)d->(bt)nd', vision_features, t=num_frames
         )

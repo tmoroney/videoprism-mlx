@@ -278,6 +278,12 @@ class EncodersTest(parameterized.TestCase):
       ('train', False, True, False),
       ('scan_and_train', True, True, False),
       ('return_intermediate', True, False, True),
+      (
+          'selectively_return_intermediate',
+          True,
+          False,
+          {'spatial_features', 'frame_embeddings'},
+      ),
   )
   def test_factorized_video_clip(
       self, scan: bool, train: bool, return_intermediate: bool
@@ -334,20 +340,35 @@ class EncodersTest(parameterized.TestCase):
     self.assertLen(jax.tree_util.tree_flatten(params)[0], 88 if scan else 136)
     self.assertEqual(video_embeddings.shape, (batch_size, dim))
     self.assertEqual(text_embeddings.shape, (batch_size, dim))
-    if return_intermediate:
-      self.assertEqual(
-          outputs['spatial_features'].shape,
-          (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
-      )
-      self.assertEqual(
-          outputs['spatiotemporal_features'].shape,
-          (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
-      )
-      self.assertEqual(
-          outputs['frame_embeddings'].shape, (batch_size, num_frames, dim)
-      )
-    else:
+    if not return_intermediate:
       self.assertEmpty(outputs)
+    else:
+      if return_intermediate is True:  # pylint: disable=g-bool-id-comparison
+        self.assertEqual(
+            set(outputs.keys()),
+            {
+                'frame_embeddings',
+                'spatial_features',
+                'spatiotemporal_features',
+            },
+        )
+      else:
+        self.assertEqual(set(outputs.keys()), set(return_intermediate))
+
+      if 'spatial_features' in outputs:
+        self.assertEqual(
+            outputs['spatial_features'].shape,
+            (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
+        )
+      if 'spatiotemporal_features' in outputs:
+        self.assertEqual(
+            outputs['spatiotemporal_features'].shape,
+            (batch_size, num_frames * (image_size // patch_size) ** 2, dim),
+        )
+      if 'frame_embeddings' in outputs:
+        self.assertEqual(
+            outputs['frame_embeddings'].shape, (batch_size, num_frames, dim)
+        )
 
 
 if __name__ == '__main__':
