@@ -266,7 +266,7 @@ def get_model(
     model_name: str | None,
     model_fn: Callable[[], nn.Module] | None = None,
     models: Mapping[str, Callable[[], nn.Module]] | None = None,
-    fprop_dtype: jnp.dtype | None = None,
+    fprop_dtype: jnp.dtype | str | None = None,
 ):
   """Returns VideoPrism model with the given name.
 
