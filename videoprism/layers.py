@@ -36,7 +36,7 @@ def identity(x: Array) -> Array:
   return x
 
 
-def _get_large_negative_number(dtype: jnp.dtype) -> Array:
+def _get_large_negative_number(dtype: jax.typing.DTypeLike) -> Array:
   """Returns a large-magnitude negative value for the given dtype."""
   # -0.7 is a float64 in JAX. Explicit cast output to target dtype.
   if jnp.issubdtype(dtype, jnp.inexact):
@@ -73,7 +73,7 @@ def _apply_mask_to_logits(logits: Array, mask: Array) -> Array:
 
 
 def _convert_paddings_to_mask(
-    paddings: Array, dtype: jnp.dtype = jnp.float32
+    paddings: Array, dtype: jax.typing.DTypeLike = jnp.float32
 ) -> Array:
   """Converts binary paddings to a logit mask ready to add to attention matrix.
 
