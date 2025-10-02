@@ -48,6 +48,9 @@ from videoprism import encoders
 from videoprism import tokenizers
 from videoprism import utils
 
+K400_NUM_CLASSES: int = 400
+SSV2_NUM_CLASSES: int = 174
+
 TEXT_MAX_LEN: int = 64
 TEXT_TOKENIZERS = {
     'c4_en': {
