@@ -14,10 +14,20 @@
 
 """Tests for text tokenizers."""
 
+import os
+import unittest
+
 from absl.testing import parameterized
 import numpy as np
-import tensorflow as tf
+import pytest
 from videoprism import tokenizers
+
+# Check if TensorFlow is available for optional tests
+try:
+  import tensorflow as tf
+  HAS_TF = True
+except ImportError:
+  HAS_TF = False
 
 
 class PyToTfWrapper:
@@ -36,23 +46,17 @@ class PyToTfWrapper:
     return ret.numpy().tolist()
 
 
-class TokenizersTest(tf.test.TestCase, parameterized.TestCase):
+class TokenizersTest(parameterized.TestCase):
 
   def setUp(self):
-    import os
     self.spm_path = os.path.join(
         os.path.dirname(__file__), "assets", "testdata", "test_spm.model"
     )
     super().setUp()
 
-  @parameterized.named_parameters(
-      ("py", False),
-      ("tf", True),
-  )
-  def test_sentencepiece_tokenizer(self, wrap_model):
+  def test_sentencepiece_tokenizer(self):
+    """Test basic tokenization without TensorFlow."""
     model = tokenizers.SentencePieceTokenizer(self.spm_path)
-    if wrap_model:
-      model = PyToTfWrapper(model)
     self.assertEqual(model.vocab_size, 1000)
     bos, eos = model.bos_token, model.eos_token
     self.assertEqual(bos, 1)
@@ -68,7 +72,30 @@ class TokenizersTest(tf.test.TestCase, parameterized.TestCase):
         [[80, 180, 60], [80, 180, 60, 80, 180, 60]],
     )
 
+  @unittest.skipUnless(HAS_TF, "TensorFlow not installed")
+  def test_sentencepiece_tokenizer_tf_op(self):
+    """Test TensorFlow ops (requires TensorFlow)."""
+    model = tokenizers.SentencePieceTokenizer(self.spm_path)
+    wrapped_model = PyToTfWrapper(model)
+    
+    self.assertEqual(wrapped_model.vocab_size, 1000)
+    bos, eos = wrapped_model.bos_token, wrapped_model.eos_token
+    self.assertEqual(bos, 1)
+    self.assertEqual(eos, 2)
+    self.assertEqual(wrapped_model.to_int("blah"), [80, 180, 60])
+    self.assertEqual(wrapped_model.to_int("blah", bos=True), [bos, 80, 180, 60])
+    self.assertEqual(wrapped_model.to_int("blah", eos=True), [80, 180, 60, eos])
+    self.assertEqual(
+        wrapped_model.to_int("blah", bos=True, eos=True), [bos, 80, 180, 60, eos]
+    )
+    self.assertEqual(
+        wrapped_model.to_int(["blah", "blah blah"]),
+        [[80, 180, 60], [80, 180, 60, 80, 180, 60]],
+    )
+
+  @unittest.skipUnless(HAS_TF, "TensorFlow not installed")
   def test_sentencepiece_tokenizer_tf_data(self):
+    """Test TensorFlow data pipeline integration (requires TensorFlow)."""
     model = tokenizers.SentencePieceTokenizer(self.spm_path)
 
     def gen():
@@ -82,10 +109,10 @@ class TokenizersTest(tf.test.TestCase, parameterized.TestCase):
         for a in ds.as_numpy_iterator()
     ]
     print(res)
-    self.assertAllEqual(
+    np.testing.assert_array_equal(
         res, [[[80, 180, 60]], [[80, 180, 60], [80, 180, 60, 80, 180, 60]]]
     )
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  unittest.main()

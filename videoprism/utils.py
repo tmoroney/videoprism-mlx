@@ -20,9 +20,9 @@ import io
 import os
 import string
 
+import fsspec
 import jax
 import numpy as np
-from tensorflow.io import gfile
 
 
 def traverse_with_names(tree, with_inner_nodes=False):
@@ -109,8 +109,8 @@ def npload(fname):
   if os.path.exists(fname):
     loaded = np.load(fname, allow_pickle=False)
   else:
-    # For other (remote) paths go via gfile+BytesIO as np.load requires seeks.
-    with gfile.GFile(fname, "rb") as f:
+    # For other (remote) paths go via fsspec+BytesIO as np.load requires seeks.
+    with fsspec.open(fname, "rb") as f:
       data = f.read()
     loaded = np.load(io.BytesIO(data), allow_pickle=False)
 

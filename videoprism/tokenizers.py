@@ -15,12 +15,13 @@
 """Tokenizers for text encoders."""
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
-import tensorflow as tf
-from tensorflow.io import gfile
-
+import fsspec
 import sentencepiece
+
+if TYPE_CHECKING:
+  import tensorflow as tf
 
 SentencePieceProcessor = sentencepiece.SentencePieceProcessor
 
@@ -44,8 +45,11 @@ class Tokenizer(Protocol):
 
   def to_int_tf_op(
       self, text: str | Sequence[str], *, bos: bool = False, eos: bool = False
-  ) -> tf.Tensor | tf.RaggedTensor:
+  ) -> "tf.Tensor | tf.RaggedTensor":
     """Same as `to_int()`, but as TF ops to be used in data pipelines.
+
+    Note: This method requires TensorFlow to be installed. It is optional
+    and only needed if you're using TensorFlow data pipelines.
 
     Args:
       text: can be a single string, or a list of strings.
@@ -82,7 +86,7 @@ class SentencePieceTokenizer(Tokenizer):
     Args:
       model_path: A path to load the SentencePiece model.
     """
-    with gfile.GFile(model_path, "rb") as f:
+    with fsspec.open(model_path, "rb") as f:
       model_bytes = f.read()
 
     self._model = SentencePieceProcessor()
@@ -115,8 +119,11 @@ class SentencePieceTokenizer(Tokenizer):
 
   def to_int_tf_op(
       self, text: str | Sequence[str], *, bos: bool = False, eos: bool = False
-  ) -> tf.Tensor | tf.RaggedTensor:
+  ) -> "tf.Tensor | tf.RaggedTensor":
     """Same as `to_int()`, but as TF ops to be used in data pipelines.
+
+    Note: This method requires TensorFlow to be installed. It is optional
+    and only needed if you're using TensorFlow data pipelines.
 
     Args:
       text: can be a single string, or a list of strings.
@@ -125,7 +132,18 @@ class SentencePieceTokenizer(Tokenizer):
 
     Returns:
       A tf.Tensor or tf.RaggedTensor of tokens.
+    
+    Raises:
+      ImportError: If TensorFlow is not installed.
     """
+    try:
+      import tensorflow as tf
+    except ImportError as e:
+      raise ImportError(
+          "TensorFlow is required for to_int_tf_op(). "
+          "Install it with: pip install tensorflow or tensorflow-cpu"
+      ) from e
+    
     text = tf.convert_to_tensor(text)
     if text.ndim == 0:
 
