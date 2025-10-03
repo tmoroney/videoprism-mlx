@@ -16,9 +16,12 @@
 
 import collections
 from collections.abc import Mapping, Sequence
+import hashlib
 import io
 import os
 import string
+import tempfile
+from urllib import parse as urlparse
 
 import fsspec
 import jax
@@ -103,16 +106,47 @@ def recover_tree(keys, values):
   return tree
 
 
+def _get_cache_dir() -> str:
+  env_dir = os.environ.get("VIDEOPRISM_CACHE_DIR")
+  if env_dir:
+    return env_dir
+  home_dir = os.path.expanduser("~")
+  if home_dir and home_dir != "~" and os.path.isdir(home_dir):
+    return os.path.join(home_dir, ".cache", "videoprism")
+  return os.path.join(tempfile.gettempdir(), "videoprism_cache")
+
+
+_CACHE_DIR = _get_cache_dir()
+os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _cache_remote_file(path: str) -> str:
+  if not path.startswith(("gs://", "http://", "https://", "s3://")):
+    return path
+
+  parsed = urlparse.urlparse(path)
+  ext = os.path.splitext(parsed.path)[1] or ".cache"
+  digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
+  local_path = os.path.join(_CACHE_DIR, f"{digest}{ext}")
+
+  if os.path.exists(local_path):
+    return local_path
+
+  storage_options = {"token": "anon"} if path.startswith("gs://") else {}
+  with fsspec.open(path, "rb", **storage_options) as src, tempfile.NamedTemporaryFile(
+      dir=_CACHE_DIR, suffix=ext, delete=False
+  ) as dst:
+    dst.write(src.read())
+    temp_path = dst.name
+
+  os.replace(temp_path, local_path)
+  return local_path
+
+
 def npload(fname):
   """Loads `fname` and returns an np.ndarray or dict thereof."""
-  # Load the data; use local paths directly if possible:
-  if os.path.exists(fname):
-    loaded = np.load(fname, allow_pickle=False)
-  else:
-    # For other (remote) paths go via fsspec+BytesIO as np.load requires seeks.
-    with fsspec.open(fname, "rb") as f:
-      data = f.read()
-    loaded = np.load(io.BytesIO(data), allow_pickle=False)
+  full_path = _cache_remote_file(fname)
+  loaded = np.load(full_path, allow_pickle=False)
 
   # Support loading both single-array files (np.save) and zips (np.savez).
   if isinstance(loaded, np.ndarray):

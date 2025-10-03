@@ -17,8 +17,10 @@
 from collections.abc import Sequence
 from typing import Protocol, TYPE_CHECKING
 
-import fsspec
 import sentencepiece
+
+# Import shared caching utilities
+from videoprism.utils import _cache_remote_file
 
 if TYPE_CHECKING:
   import tensorflow as tf
@@ -86,7 +88,8 @@ class SentencePieceTokenizer(Tokenizer):
     Args:
       model_path: A path to load the SentencePiece model.
     """
-    with fsspec.open(model_path, "rb") as f:
+    local_model_path = _cache_remote_file(model_path)
+    with open(local_model_path, "rb") as f:
       model_bytes = f.read()
 
     self._model = SentencePieceProcessor()

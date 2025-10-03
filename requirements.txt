@@ -4,5 +4,7 @@ einops
 einshape
 flax
 fsspec
+gcsfs
 huggingface-hub
+opencv-python
 sentencepiece
