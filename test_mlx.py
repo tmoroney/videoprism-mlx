@@ -61,7 +61,7 @@ print(f"      Video shape: {video_input.shape}")
 # ============================================================================
 start = time.time()
 print("\n[4/5] Tokenizing text queries...")
-text_queries = ["a person walking", "drumming on water bottles", "a car driving"]
+text_queries = ["a person walking", "a car driving", "child drumming on water bottles"]
 text_ids, text_paddings = vp.tokenize_texts(text_tokenizer, text_queries)
 
 # Convert to MLX arrays
