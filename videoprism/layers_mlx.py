@@ -33,37 +33,27 @@ import mlx.nn as nn
 ActivationFunc = Callable[[mx.array], mx.array]
 
 
-def _get_large_negative_number(dtype: mx.Dtype = mx.float32) -> float:
-    """Returns a large negative value for creating attention masks."""
-    return -1e9
-
-
-def _apply_mask_to_logits(logits: mx.array, mask: mx.array) -> mx.array:
-    """Applies attention mask to logits."""
-    large_negative = _get_large_negative_number(logits.dtype)
-    return mx.where(mask, logits, large_negative)
-
-
 def _convert_paddings_to_mask(paddings: mx.array, dtype: mx.Dtype = mx.float32) -> mx.array:
-    """Converts padding indicators to attention mask."""
-    attention_mask = 1.0 - paddings
-    attention_mask = attention_mask[:, None, None, :]
-    return attention_mask.astype(dtype)
-
-
-def _causal_mask(seq_len: int, dtype: mx.Dtype = mx.float32) -> mx.array:
-    """Creates causal attention mask."""
-    mask = mx.tril(mx.ones((seq_len, seq_len), dtype=dtype))
-    return mask[None, None, :, :]
-
-
-def _merge_masks(mask1: Optional[mx.array], mask2: Optional[mx.array]) -> Optional[mx.array]:
-    """Merges two attention masks using logical AND."""
-    if mask1 is None:
-        return mask2
-    if mask2 is None:
-        return mask1
-    return mask1 * mask2
+    """Converts padding indicators to additive attention mask.
+    
+    Args:
+        paddings: Padding indicators of shape [batch, seq_len].
+                  1.0 indicates padding, 0.0 indicates valid token.
+        dtype: Data type for the mask.
+    
+    Returns:
+        Additive attention mask of shape [batch, 1, 1, seq_len].
+        0.0 for valid positions, -inf for masked positions.
+    """
+    # paddings: 1 where padded, 0 where valid
+    pad_bool = paddings.astype(mx.bool_)
+    # Shape: (B, 1, 1, L) — broadcast over heads and query length
+    pad_mask = mx.where(
+        pad_bool[:, None, None, :],
+        mx.finfo(dtype).min,
+        mx.array(0.0, dtype=dtype),
+    )
+    return pad_mask
 
 
 def compute_attention_masks_for_fprop(
@@ -71,16 +61,23 @@ def compute_attention_masks_for_fprop(
     paddings: mx.array,
     causal_attention: bool = False,
 ) -> mx.array:
-    """Computes attention masks for forward propagation."""
-    batch_size, seq_len = inputs.shape[0], inputs.shape[1]
-    attention_mask = _convert_paddings_to_mask(paddings, dtype=inputs.dtype)
-    
+    """Computes additive attention masks for forward propagation.
+
+    Returns an additive mask broadcastable to (B, H, Tq, Tk) with 0.0 for
+    valid positions and -inf for masked positions.
+    """
+    seq_len = inputs.shape[1]
+    dtype = inputs.dtype
+
+    # Get padding mask: (B, 1, 1, L)
+    pad_mask = _convert_paddings_to_mask(paddings, dtype=dtype)
+
     if causal_attention:
-        causal = _causal_mask(seq_len, dtype=inputs.dtype)
-        padding_mask_expanded = mx.broadcast_to(attention_mask, (batch_size, 1, seq_len, seq_len))
-        attention_mask = _merge_masks(padding_mask_expanded, causal)
-    
-    return attention_mask
+        # Shape: (1, 1, L, L)
+        causal = nn.MultiHeadAttention.create_additive_causal_mask(seq_len, dtype=dtype)
+        return pad_mask + causal
+
+    return pad_mask
 
 
 class LayerNorm(nn.Module):
@@ -133,9 +130,47 @@ class PerDimScale(nn.Module):
         return x * self.scale
 
 
-class DotProductAttention(nn.Module):
-    """Multi-head dot-product attention using mx.fast.scaled_dot_product_attention."""
+@mx.compile
+def _manual_attention_with_logit_cap(
+    q: mx.array,
+    k: mx.array,
+    v: mx.array,
+    scale: float,
+    logit_cap: float,
+    mask: Optional[mx.array] = None,
+) -> mx.array:
+    """Compiled manual attention with logit soft-capping.
     
+    This function is compiled to fuse operations into optimized kernels.
+    """
+    # Compute attention logits
+    logits = (q @ k.transpose(0, 1, 3, 2)) * scale
+    
+    # Apply tanh soft-capping if enabled
+    if logit_cap > 0.0:
+        logits = logit_cap * mx.tanh(logits / logit_cap)
+    
+    # Apply additive mask after soft-capping
+    if mask is not None:
+        logits = logits + mask
+    
+    # Compute attention weights and output
+    attn_weights = mx.softmax(logits.astype(mx.float32), axis=-1, precise=True).astype(logits.dtype)
+    return attn_weights @ v
+
+
+class DotProductAttention(nn.Module):
+    """Multi-head dot-product attention with optional logit soft-capping.
+
+    Notes
+    -----
+    * Supports additive masks (0.0 keep, -inf mask) broadcastable to (B, H, Tq, Tk).
+    * If `atten_logit_cap > 0`, we apply: logits = cap * tanh(logits / cap) **before** softmax,
+      and we add the mask **after** soft-capping so masked positions remain -inf.
+    * If `atten_logit_cap <= 0` and `dropout_prob == 0`, we use the fast SDPA path for speed.
+    * Manual path uses mx.compile for operation fusion and optimization.
+    """
+
     def __init__(
         self,
         model_dim: int,
@@ -144,7 +179,7 @@ class DotProductAttention(nn.Module):
         hidden_dim: Optional[int] = None,
         use_bias: bool = True,
         dropout_prob: float = 0.0,
-        internal_enable_per_dim_scale: bool = True,
+        internal_enable_per_dim_scale: bool = True,  # kept for API compatibility
         atten_logit_cap: float = 0.0,
         use_qk_norm: bool = False,
     ):
@@ -152,27 +187,40 @@ class DotProductAttention(nn.Module):
         self.model_dim = model_dim
         self.num_heads = num_heads
         self.dim_per_head = dim_per_head if dim_per_head is not None else model_dim // num_heads
-        self.hidden_dim = hidden_dim if hidden_dim is not None else model_dim
-        self.atten_logit_cap = atten_logit_cap
-        self.use_qk_norm = use_qk_norm
         self.total_dim = self.num_heads * self.dim_per_head
-        
+        self.hidden_dim = hidden_dim if hidden_dim is not None else model_dim
+        self.use_qk_norm = use_qk_norm
+        self.atten_logit_cap = float(atten_logit_cap) if atten_logit_cap is not None else 0.0
+
+        # Projections
         self.q_proj = nn.Linear(model_dim, self.total_dim, bias=use_bias)
         self.k_proj = nn.Linear(model_dim, self.total_dim, bias=use_bias)
         self.v_proj = nn.Linear(model_dim, self.total_dim, bias=use_bias)
         self.out_proj = nn.Linear(self.total_dim, self.hidden_dim, bias=use_bias)
-        
-        if internal_enable_per_dim_scale:
-            self.per_dim_scale = PerDimScale(self.dim_per_head, init_scale=1.0 / math.sqrt(self.dim_per_head))
-        else:
-            self.per_dim_scale = None
-        
+
         if use_qk_norm:
+            # Normalize the last dim of per-head features
             self.q_norm = nn.RMSNorm(self.dim_per_head)
             self.k_norm = nn.RMSNorm(self.dim_per_head)
-        
-        self.dropout = nn.Dropout(dropout_prob) if dropout_prob > 0.0 else None
-    
+
+        # Dropout on attention *probabilities* (classic attention dropout)
+        self.attn_dropout = nn.Dropout(dropout_prob) if dropout_prob > 0.0 else None
+
+        # Optional per-dim scaling on Q (kept for parity with prior code)
+        self.per_dim_scale = (
+            PerDimScale(self.dim_per_head, init_scale=1.0 / math.sqrt(self.dim_per_head))
+            if internal_enable_per_dim_scale else None
+        )
+
+    def _shape_qkv(self, q: mx.array, k: mx.array, v: mx.array):
+        # (B, T, D) -> (B, H, T, Dh)
+        B, Tq, _ = q.shape
+        Tk = k.shape[1]
+        q = q.reshape(B, Tq, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
+        k = k.reshape(B, Tk, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
+        v = v.reshape(B, Tk, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
+        return q, k, v
+
     def __call__(
         self,
         query: mx.array,
@@ -180,42 +228,63 @@ class DotProductAttention(nn.Module):
         value: mx.array,
         atten_mask: Optional[mx.array] = None,
     ) -> tuple[mx.array, Optional[mx.array]]:
-        batch_size, query_len = query.shape[0], query.shape[1]
-        kv_len = key.shape[1]
-        
-        q = self.q_proj(query).reshape(batch_size, query_len, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
-        k = self.k_proj(key).reshape(batch_size, kv_len, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
-        v = self.v_proj(value).reshape(batch_size, kv_len, self.num_heads, self.dim_per_head).transpose(0, 2, 1, 3)
-        
+        B, Tq, _ = query.shape
+        Tk = key.shape[1]
+        dtype = query.dtype
+
+        # Projections
+        q = self.q_proj(query)
+        k = self.k_proj(key)
+        v = self.v_proj(value)
+        q, k, v = self._shape_qkv(q, k, v)
+
+        # Optional RMSNorm on Q/K per head
         if self.use_qk_norm:
             q = self.q_norm(q)
             k = self.k_norm(k)
-        
+
+        # Optional per-dim scale on Q
         if self.per_dim_scale is not None:
             q = self.per_dim_scale(q)
+
+        # Compute scale factor: only scale if per_dim_scale was NOT applied
+        # (to avoid double-scaling by 1/dim_per_head)
+        scale = 1.0 if self.per_dim_scale is not None else 1.0 / math.sqrt(self.dim_per_head)
+
+        # Fast path when no logit cap and no attn dropout
+        if self.atten_logit_cap <= 0.0 and self.attn_dropout is None:
+            # Ensure mask dtype promotes correctly (bf16/fp16 safety)
+            if atten_mask is not None and atten_mask.dtype != dtype:
+                atten_mask = atten_mask.astype(dtype)
+            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=atten_mask)
+            out = out.transpose(0, 2, 1, 3).reshape(B, Tq, self.total_dim)
+            out = self.out_proj(out)
+            return out, None
+
+        # Manual path with logit capping
+        # Ensure mask dtype matches
+        if atten_mask is not None and atten_mask.dtype != dtype:
+            atten_mask = atten_mask.astype(dtype)
         
-        scale = 1.0 / math.sqrt(self.dim_per_head)
-        
-        if self.atten_logit_cap > 0.0:
-            attn_logits = mx.matmul(q, k.transpose(0, 1, 3, 2)) * scale
-            attn_logits = self.atten_logit_cap * mx.tanh(attn_logits / self.atten_logit_cap)
-            if atten_mask is not None:
-                attn_logits = _apply_mask_to_logits(attn_logits, atten_mask)
-            attn_weights = mx.softmax(attn_logits, axis=-1)
-            if self.dropout is not None:
-                attn_weights = self.dropout(attn_weights)
-            output = mx.matmul(attn_weights, v)
+        # Use compiled function when no dropout (for operation fusion and speed)
+        if self.attn_dropout is None:
+            # Compiled path: fuses matmul, tanh, mask, softmax, matmul into optimized kernels
+            out = _manual_attention_with_logit_cap(q, k, v, scale, self.atten_logit_cap, atten_mask)
         else:
+            # Uncompiled path with dropout (dropout must be applied to attention weights)
+            logits = (q @ k.transpose(0, 1, 3, 2)) * scale
+            if self.atten_logit_cap > 0.0:
+                logits = self.atten_logit_cap * mx.tanh(logits / self.atten_logit_cap)
             if atten_mask is not None:
-                additive_mask = _apply_mask_to_logits(mx.zeros_like(atten_mask), atten_mask)
-            else:
-                additive_mask = None
-            output = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=additive_mask)
-            attn_weights = None
+                logits = logits + atten_mask
+            attn_weights = mx.softmax(logits.astype(mx.float32), axis=-1, precise=True).astype(logits.dtype)
+            attn_weights = self.attn_dropout(attn_weights)  # Dropout on attention weights
+            out = attn_weights @ v
         
-        output = output.transpose(0, 2, 1, 3).reshape(batch_size, query_len, self.total_dim)
-        output = self.out_proj(output)
-        return output, attn_weights
+        # Reshape and project output
+        out = out.transpose(0, 2, 1, 3).reshape(B, Tq, self.total_dim)
+        out = self.out_proj(out)
+        return out, None
 
 
 class TransformerFeedForward(nn.Module):
@@ -407,14 +476,14 @@ class AttentionPoolingLayer(nn.Module):
         
         self.query = mx.random.normal((num_queries, query_dim))
         
-        self.attention = DotProductAttention(
-            model_dim=query_dim,
+        self.attention = nn.MultiHeadAttention(
+            dims=query_dim,
             num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            use_bias=use_bias,
-            dropout_prob=0.0,
-            internal_enable_per_dim_scale=internal_enable_per_dim_scale,
-            use_qk_norm=use_qk_norm,
+            query_input_dims=query_dim,
+            key_input_dims=input_dim,
+            value_input_dims=input_dim,
+            value_output_dims=hidden_dim,
+            bias=use_bias,
         )
         
         self.layer_norm = LayerNorm(hidden_dim) if add_layer_norm else None
@@ -429,7 +498,7 @@ class AttentionPoolingLayer(nn.Module):
             paddings = mx.zeros((batch_size, seq_length), dtype=tokens.dtype)
         
         atten_mask = _convert_paddings_to_mask(paddings, dtype=tokens.dtype)
-        outputs, _ = self.attention(query, tokens, tokens, atten_mask)
+        outputs = self.attention(query, tokens, tokens, mask=atten_mask)
         
         if self.layer_norm is not None:
             outputs = self.layer_norm(outputs)
