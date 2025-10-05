@@ -942,3 +942,122 @@ class FactorizedVideoCLIP(nn.Module):
                 text_embeddings = _l2_normalize(text_embeddings, axis=-1)
         
         return video_embeddings, text_embeddings, outputs
+
+
+class FactorizedVideoClassifier(nn.Module):
+    """Video classifier with FactorizedEncoder backbone.
+    
+    This model uses the factorized spatial-temporal encoder followed by attention
+    pooling and a linear projection head for classification.
+    
+    Attributes:
+        patch_size: Size of the spatial patches.
+        pos_emb_shape: Shape of positional embeddings (T, H, W).
+        model_dim: Model dimension (embedding size).
+        num_spatial_layers: Number of spatial transformer layers.
+        num_temporal_layers: Number of temporal transformer layers.
+        num_heads: Number of attention heads.
+        mlp_dim: Hidden dimension of FFN.
+        atten_logit_cap: Attention logit capping value.
+        norm_policy: Normalization policy ('pre', 'post', etc.).
+        num_classes: Number of output classes.
+    """
+    
+    def __init__(
+        self,
+        patch_size: int = 18,
+        pos_emb_shape: tuple[int, int, int] = (16, 16, 16),
+        model_dim: int = 768,
+        num_spatial_layers: int = 12,
+        num_temporal_layers: int = 4,
+        num_heads: int = 12,
+        mlp_dim: int = 3072,
+        atten_logit_cap: float = 0.0,
+        norm_policy: str = 'pre',
+        num_classes: int = 1000,
+    ):
+        super().__init__()
+        self.model_dim = model_dim
+        self.num_classes = num_classes
+        
+        # Vision encoder backbone
+        self.encoder = FactorizedEncoder(
+            patch_size=patch_size,
+            pos_emb_shape=pos_emb_shape,
+            model_dim=model_dim,
+            num_spatial_layers=num_spatial_layers,
+            num_temporal_layers=num_temporal_layers,
+            num_heads=num_heads,
+            mlp_dim=mlp_dim,
+            atten_logit_cap=atten_logit_cap,
+            norm_policy=norm_policy,
+        )
+        
+        # Attention pooling to get global embeddings
+        self.atten_pooler = layers.AttentionPoolingLayer(
+            input_dim=model_dim,
+            num_heads=num_heads,
+            hidden_dim=model_dim,
+            num_queries=1,
+            use_bias=True,
+            add_layer_norm=False,
+            dropout_prob=0.0,
+            internal_enable_per_dim_scale=False,
+        )
+        
+        # Classification head
+        self.projection = layers.FeedForward(
+            input_dim=model_dim,
+            hidden_dim=model_dim,
+            output_dim=num_classes,
+            activation_fn=layers.identity,
+            use_bias=True,
+            dropout_prob=0.0,
+        )
+    
+    def __call__(
+        self,
+        inputs: mx.array,
+        frame_paddings: Optional[mx.array] = None,
+        return_intermediate: bool | Collection[str] = False,
+    ) -> tuple[mx.array, dict]:
+        """Applies video classifier to inputs.
+        
+        Args:
+            inputs: Input tensor of shape [B, T, H, W, 3].
+            frame_paddings: Optional binary tensor of shape [B, T] indicating padding.
+                1 denotes padding frame.
+            return_intermediate: A boolean for whether all intermediate features are
+                returned, or a collection of intermediate feature names to return.
+        
+        Returns:
+            logits: Output tensor of shape [B, num_classes].
+            outputs: A dictionary of additional outputs, including 'spatial_features'
+                of shape [B, T * N, D], 'spatiotemporal_features' of shape [B, T * N, D],
+                and 'global_embeddings' of shape [B, D]. Empty if return_intermediate is False.
+        """
+        # Encode video through factorized encoder
+        features, outputs = self.encoder(
+            inputs,
+            frame_paddings=frame_paddings,
+            return_intermediate=return_intermediate,
+        )
+        
+        # Store spatiotemporal features if requested
+        if _contains(return_intermediate, 'spatiotemporal_features'):
+            outputs['spatiotemporal_features'] = features
+        
+        # Attention pooling to get global embeddings
+        embeddings = self.atten_pooler(features, paddings=None)
+        
+        # Squeeze query dimension: [B, 1, D] -> [B, D]
+        embeddings = mx.squeeze(embeddings, axis=1)
+        
+        # Store global embeddings if requested
+        if _contains(return_intermediate, 'global_embeddings'):
+            outputs['global_embeddings'] = embeddings
+        
+        # Classification head
+        logits = self.projection(embeddings)
+        
+        return logits, outputs

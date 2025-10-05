@@ -15,8 +15,9 @@ This document explains the process of converting Google's VideoPrism model from 
 ## Model Overview
 
 ### VideoPrism Architecture
-VideoPrism is a video-language foundation model that encodes videos and text into a shared embedding space. The architecture consists of:
+VideoPrism is a video-language foundation model that encodes videos and text into a shared embedding space. Two model variants have been converted:
 
+**1. FactorizedVideoCLIP (video-text contrastive learning)**
 ```
 FactorizedVideoCLIP
 ├── Vision Encoder (FactorizedEncoder)
@@ -31,6 +32,19 @@ FactorizedVideoCLIP
 │   ├── Positional Embeddings
 │   └── Unimodal Transformer (12 layers)
 └── Auxiliary Encoder (2 layers, optional)
+```
+
+**2. FactorizedVideoClassifier (video classification)**
+```
+FactorizedVideoClassifier
+├── Vision Encoder (FactorizedEncoder)
+│   ├── Patch Projection (18×18 patches)
+│   ├── Spatial Positional Embeddings
+│   ├── Spatial Transformer Stack (12 layers)
+│   ├── Temporal Positional Embeddings
+│   └── Temporal Transformer Stack (4 layers)
+├── Attention Pooling Layer
+└── Classification Head (Linear projection)
 ```
 
 ### Model Specifications
