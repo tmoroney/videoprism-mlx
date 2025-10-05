@@ -117,74 +117,154 @@ def convert_flax_to_mlx(flax_params, model_config):
     Returns:
         MLX-formatted parameter dictionary
     """
-    # Flatten Flax params
-    flat_flax = flatten_dict(flax_params, sep='/')
+    # Flatten Flax params - use keep_empty_nodes to preserve structure
+    flat_flax = flatten_dict(flax_params)
     
-    # Convert to regular dict with string keys
-    flat_flax_dict = {'/'.join(str(k) for k in key): np.array(value) 
-                      for key, value in flat_flax.items()}
+    # Convert to regular dict with string keys (join tuple keys with '/')
+    flat_flax_dict = {}
+    for key, value in flat_flax.items():
+        # Key is a tuple like ('vision_encoder', 'spatial_encoder', 'transformers_stack', ...)
+        key_str = '/'.join(str(k) for k in key)
+        flat_flax_dict[key_str] = np.array(value)
     
     print(f"  Found {len(flat_flax_dict)} Flax parameters")
     
-    # Unstack scan layers
-    print("  Unstacking scanned layers...")
+    # Debug: print first few keys to verify structure
+    print("  Sample keys:")
+    for i, key in enumerate(sorted(flat_flax_dict.keys())[:3]):
+        print(f"    {key}")
     
-    # Vision encoder - spatial (12 layers)
     mlx_params = {}
     
     # Handle stacked transformer layers
     components = [
-        ('vision_encoder/spatial_encoder/transformers_stack', 12),
-        ('vision_encoder/temporal_encoder/transformers_stack', 4),
-        ('text_encoder/unimodal_transformer', 12),
-        ('auxiliary_encoder/transformers_stack', 2),
+        ('vision_encoder/spatial_encoder/transformers_stack', 12, 'spatial'),
+        ('vision_encoder/temporal_encoder/transformers_stack', 4, 'temporal'),
+        ('text_encoder/unimodal_transformer', 12, 'text'),
+        ('auxiliary_encoder/transformers_stack', 2, 'auxiliary'),
     ]
     
-    for prefix, num_layers in components:
-        print(f"    Unstacking {prefix} ({num_layers} layers)...")
-        for layer_idx in range(num_layers):
-            # Find all parameters for this layer
-            layer_params = {}
+    print("\n  Unstacking scanned layers...")
+    
+    for prefix, num_layers, component_name in components:
+        print(f"    Processing {component_name} encoder ({num_layers} layers)...")
+        
+        # Find all x_layers parameters for this component
+        x_layer_params = {}
+        for key, value in flat_flax_dict.items():
+            if key.startswith(prefix) and '/x_layers/' in key:
+                x_layer_params[key] = value
+        
+        print(f"      Found {len(x_layer_params)} stacked parameters")
+        
+        # Unstack each parameter
+        for key, value in x_layer_params.items():
+            # Extract the path after x_layers
+            # e.g., 'vision_encoder/spatial_encoder/transformers_stack/x_layers/ff_layer/...'
+            parts = key.split('/')
             
-            for key, value in flat_flax_dict.items():
-                if f"{prefix}/x_layers" in key:
-                    # Extract layer-specific weight
-                    if value.ndim > 0 and value.shape[0] == num_layers:
-                        # This is a stacked parameter
-                        parts = key.split('/')
-                        # Remove x_layers from path
-                        new_parts = [p for p in parts if p != 'x_layers']
-                        new_key = '/'.join(new_parts)
+            # Find x_layers index
+            try:
+                x_layers_idx = parts.index('x_layers')
+                layer_path = '/'.join(parts[x_layers_idx + 1:])  # Everything after x_layers
+                
+                # Check if this is a stacked parameter (first dim = num_layers)
+                if value.ndim > 0 and value.shape[0] == num_layers:
+                    # Unstack into individual layers
+                    for layer_idx in range(num_layers):
+                        # Build new key: prefix/layers/0/ff_layer/...
+                        mlx_key = f"{prefix}/layers/{layer_idx}/{layer_path}"
                         
-                        # Replace component prefix
-                        new_key = new_key.replace(f"{prefix}/", f"{prefix}/layers/{layer_idx}/")
+                        # Rename parameters (kernel→weight, etc.)
+                        mlx_key = rename_parameter(mlx_key)
                         
-                        # Rename Flax conventions to MLX
-                        new_key = rename_parameter(new_key)
-                        
-                        mlx_params[new_key] = value[layer_idx]
+                        # Extract this layer's weights
+                        mlx_params[mlx_key] = value[layer_idx]
+                else:
+                    print(f"      Warning: Expected stacked param but got shape {value.shape} for {key}")
+            except ValueError:
+                print(f"      Warning: Could not find x_layers in key: {key}")
     
     # Handle non-stacked parameters
-    print("  Converting non-stacked parameters...")
+    print("\n  Converting non-stacked parameters...")
+    non_stacked_count = 0
+    
     for key, value in flat_flax_dict.items():
         # Skip if already handled as stacked layer
         if '/x_layers/' in key:
             continue
         
         # Rename to MLX conventions
-        new_key = rename_parameter(key)
+        mlx_key = rename_parameter(key)
         
-        # Handle special cases
-        if '/linear/weight' in new_key and value.ndim == 2:
-            # Transpose linear layer weights: Flax (in, out) → MLX (out, in)
-            # Actually, let's check MLX convention first
-            mlx_params[new_key] = value  # Keep as is for now
-        else:
-            mlx_params[new_key] = value
+        # Handle special transformations
+        # Flax uses (in_features, out_features) but MLX uses (out_features, in_features)
+        # We'll keep Flax format for now and transpose during model loading if needed
+        
+        mlx_params[mlx_key] = value
+        non_stacked_count += 1
     
-    print(f"  Converted to {len(mlx_params)} MLX parameters")
+    print(f"      Processed {non_stacked_count} non-stacked parameters")
+    print(f"\n  Total MLX parameters: {len(mlx_params)}")
     
     return mlx_params
+
+
+def verify_conversion(flax_params, mlx_params, model_config):
+    """Verify the conversion by comparing parameter counts and shapes.
+    
+    Args:
+        flax_params: Original Flax parameters
+        mlx_params: Converted MLX parameters
+        model_config: Model configuration
+    """
+    print("\n" + "=" * 80)
+    print("CONVERSION VERIFICATION")
+    print("=" * 80)
+    
+    # Count parameters
+    flat_flax = flatten_dict(flax_params)
+    flax_total = sum(np.array(v).size for v in flat_flax.values())
+    mlx_total = sum(v.size for v in mlx_params.values())
+    
+    print(f"\nParameter count:")
+    print(f"  Flax:  {flax_total:,} parameters")
+    print(f"  MLX:   {mlx_total:,} parameters")
+    
+    if flax_total == mlx_total:
+        print(f"  ✓ Parameter counts match!")
+    else:
+        print(f"  ⚠ Mismatch: {abs(flax_total - mlx_total):,} parameters difference")
+    
+    # Verify layer unstacking
+    print(f"\nLayer verification:")
+    for component_name, expected_layers in [
+        ('spatial', 12),
+        ('temporal', 4),
+        ('text', 12),
+        ('auxiliary', 2),
+    ]:
+        # Count layers in MLX params
+        layer_keys = [k for k in mlx_params.keys() if f'{component_name}' in k.lower() and '/layers/' in k]
+        unique_layers = set()
+        for k in layer_keys:
+            try:
+                layer_num = int(k.split('/layers/')[1].split('/')[0])
+                unique_layers.add(layer_num)
+            except (IndexError, ValueError):
+                pass
+        
+        found_layers = len(unique_layers)
+        status = "✓" if found_layers == expected_layers else "⚠"
+        print(f"  {status} {component_name.capitalize()}: {found_layers}/{expected_layers} layers")
+    
+    # Sample a few parameters
+    print(f"\nSample parameter shapes:")
+    sample_keys = sorted(mlx_params.keys())[:5]
+    for key in sample_keys:
+        print(f"  {key}: {mlx_params[key].shape}")
+    
+    print("\n" + "=" * 80)
 
 
 def save_mlx_weights(mlx_params, output_path):
@@ -194,29 +274,45 @@ def save_mlx_weights(mlx_params, output_path):
         mlx_params: Dictionary of MLX parameters (numpy arrays)
         output_path: Path to save weights
     """
-    # Convert numpy arrays to MLX arrays
-    mlx_arrays = {k: mx.array(v) for k, v in mlx_params.items()}
-    
-    # Save using MLX's save function
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Save as safetensors or npz
-    if output_path.suffix == '.npz':
-        np.savez(output_path, **mlx_params)
-    elif output_path.suffix == '.safetensors':
-        try:
-            from safetensors.numpy import save_file
-            save_file(mlx_params, output_path)
-        except ImportError:
-            print("    ⚠ safetensors not installed, saving as .npz instead")
-            np.savez(output_path.with_suffix('.npz'), **mlx_params)
-    else:
-        # Default to pickle for complex types
-        with open(output_path, 'wb') as f:
-            pickle.dump(mlx_arrays, f)
+    # Convert numpy arrays to MLX arrays
+    print(f"  Converting to MLX arrays...")
+    mlx_arrays = {k: mx.array(v) for k, v in mlx_params.items()}
     
-    print(f"  ✓ Saved to {output_path}")
+    # Save using MLX's native functions
+    if output_path.suffix == '.npz':
+        print(f"  Saving as NPZ format using mx.savez()...")
+        mx.savez(str(output_path), **mlx_arrays)
+        print(f"  ✓ Saved to {output_path}")
+        
+        # Calculate file size
+        file_size_mb = output_path.stat().st_size / (1024 ** 2)
+        print(f"  File size: {file_size_mb:.2f} MB")
+        
+    elif output_path.suffix == '.safetensors':
+        print(f"  Saving as SafeTensors format using mx.save_safetensors()...")
+        mx.save_safetensors(str(output_path), mlx_arrays)
+        print(f"  ✓ Saved to {output_path}")
+        
+        # Calculate file size
+        file_size_mb = output_path.stat().st_size / (1024 ** 2)
+        print(f"  File size: {file_size_mb:.2f} MB")
+    else:
+        raise ValueError(f"Unsupported file format: {output_path.suffix}. Use .npz or .safetensors")
+    
+    # Also save SafeTensors if NPZ was requested (for better compatibility)
+    if output_path.suffix == '.npz':
+        safetensors_path = output_path.with_suffix('.safetensors')
+        print(f"  Also saving as SafeTensors format...")
+        try:
+            mx.save_safetensors(str(safetensors_path), mlx_arrays)
+            st_size_mb = safetensors_path.stat().st_size / (1024 ** 2)
+            print(f"  ✓ Saved to {safetensors_path}")
+            print(f"  File size: {st_size_mb:.2f} MB")
+        except Exception as e:
+            print(f"  ⚠ Could not save SafeTensors: {e}")
 
 
 def main():
@@ -242,7 +338,7 @@ def main():
     print(f"      ✓ Weights loaded")
     
     # Convert to MLX format
-    print("\n[3/4] Converting to MLX format...")
+    print("\n[3/5] Converting to MLX format...")
     
     model_config = {
         'spatial_layers': 12,
@@ -253,8 +349,12 @@ def main():
     
     mlx_params = convert_flax_to_mlx(flax_params, model_config)
     
+    # Verify conversion
+    print("\n[4/5] Verifying conversion...")
+    verify_conversion(flax_params, mlx_params, model_config)
+    
     # Save MLX weights
-    print("\n[4/4] Saving MLX weights...")
+    print("\n[5/5] Saving MLX weights...")
     output_dir = Path("weights")
     output_path = output_dir / f"{model_name}_mlx.npz"
     save_mlx_weights(mlx_params, output_path)
@@ -266,24 +366,29 @@ def main():
         'total_parameters': sum(v.size for v in mlx_params.values()),
         'num_tensors': len(mlx_params),
         'model_config': model_config,
+        'parameter_keys': sorted(mlx_params.keys()),
     }
     
     import json
     with open(output_dir / f"{model_name}_mlx_metadata.json", 'w') as f:
         json.dump(metadata, f, indent=2)
     
-    print(f"      ✓ Metadata saved")
+    print(f"\n  ✓ Metadata saved to {output_dir / f'{model_name}_mlx_metadata.json'}")
     
     print("\n" + "=" * 80)
-    print("Conversion completed successfully!")
+    print("Conversion completed successfully! ✓")
     print("=" * 80)
-    print(f"\nConverted weights saved to: {output_path}")
-    print(f"Total parameters: {metadata['total_parameters']:,}")
-    print(f"Total tensors: {metadata['num_tensors']}")
+    print(f"\nOutput files:")
+    print(f"  Weights: {output_path}")
+    print(f"  Metadata: {output_dir / f'{model_name}_mlx_metadata.json'}")
+    print(f"\nStatistics:")
+    print(f"  Total parameters: {metadata['total_parameters']:,}")
+    print(f"  Total tensors: {metadata['num_tensors']}")
+    print(f"  Model: {model_name}")
     print("\nNext steps:")
-    print("1. Load weights in MLX model")
-    print("2. Test inference and compare outputs")
-    print("3. Verify numerical accuracy")
+    print("  1. Load weights in MLX model: mlx_model.load_weights('weights/..._mlx.npz')")
+    print("  2. Test inference and compare outputs with Flax model")
+    print("  3. Verify numerical accuracy (should match within fp32 precision)")
     print()
 
 
