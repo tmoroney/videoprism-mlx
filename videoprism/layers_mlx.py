@@ -196,10 +196,7 @@ def _manual_attention_with_logit_cap(
     logit_cap: float,
     mask: Optional[mx.array] = None,
 ) -> mx.array:
-    """Manual attention with logit soft-capping.
-
-    NOTE: @mx.compile removed to avoid numerical instability from operation reordering.
-    """
+    """Manual attention with logit soft-capping."""
     # Compute attention logits
     logits = (q @ k.transpose(0, 1, 3, 2)) * scale
 
