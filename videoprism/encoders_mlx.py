@@ -102,46 +102,39 @@ def _image_to_patch(inputs: mx.array, patch_size: int) -> mx.array:
 
 
 def _interpolate_emb_1d(emb: mx.array, target_emb_length: int) -> mx.array:
-    """Interpolates a 1D positional embedding to a new shape.
-    
-    Args:
-        emb: An array of shape [1, L, D] or [L, D].
-        target_emb_length: Target length for interpolation.
-    
-    Returns:
-        target_emb: An array of shape [1, target_emb_length, D] or
-                   [target_emb_length, D].
-    """
-    # Handle both [1, L, D] and [L, D] shapes
+    """Interpolates a 1D positional embedding using bilinear resize semantics."""
+
     if emb.ndim == 3:
-        emb = emb[0]  # [L, D]
+        emb = emb[0]
         had_batch = True
     else:
         had_batch = False
-    
+
     source_length, emb_dim = emb.shape
-    
+
     if source_length == target_emb_length:
         return emb[None, :, :] if had_batch else emb
-    
-    # Linear interpolation
-    # Create interpolation indices
-    source_indices = mx.arange(source_length, dtype=mx.float32)
-    target_indices = mx.arange(target_emb_length, dtype=mx.float32)
-    target_indices = target_indices * (source_length - 1) / (target_emb_length - 1)
-    
-    # Find lower and upper indices
-    lower_indices = mx.floor(target_indices).astype(mx.int32)
-    upper_indices = mx.clip(lower_indices + 1, 0, source_length - 1)
-    lower_indices = mx.clip(lower_indices, 0, source_length - 1)
-    
-    # Compute interpolation weights
-    weights = (target_indices - lower_indices.astype(mx.float32))[:, None]
-    
-    # Interpolate
-    target_emb = emb[lower_indices] * (1 - weights) + emb[upper_indices] * weights
-    
-    return target_emb[None, :, :] if had_batch else target_emb
+
+    src = mx.array(source_length, dtype=mx.float32)
+    dst = mx.array(target_emb_length, dtype=mx.float32)
+    scale = src / dst
+
+    coords = (mx.arange(target_emb_length, dtype=mx.float32) + 0.5) * scale - 0.5
+    lower = mx.floor(coords)
+    upper = lower + 1.0
+
+    weight_upper = mx.clip(coords - lower, 0.0, 1.0)
+    weight_lower = 1.0 - weight_upper
+
+    lower_idx = mx.clip(lower.astype(mx.int32), 0, source_length - 1)
+    upper_idx = mx.clip(upper.astype(mx.int32), 0, source_length - 1)
+
+    lower_vals = emb[lower_idx]
+    upper_vals = emb[upper_idx]
+
+    interpolated = lower_vals * weight_lower[:, None] + upper_vals * weight_upper[:, None]
+
+    return interpolated[None, :, :] if had_batch else interpolated
 
 
 def _interpolate_emb_2d(
@@ -173,50 +166,18 @@ def _interpolate_emb_2d(
     
     if (source_h, source_w) == (target_h, target_w):
         return emb[None, :, :] if had_batch else emb
-    
-    # Reshape to 2D grid: [source_h, source_w, D]
-    emb_2d = emb.reshape(source_h, source_w, emb_dim)
-    
-    # Add batch dim for interpolation: [1, source_h, source_w, D]
-    emb_2d = emb_2d[None, :, :, :]
-    
-    # For now, use simple bilinear interpolation via reshape
-    # This is a simplified version - full bilinear would require more work
-    # For exact match with Flax, we'd use jax.image.resize with 'linear' method
-    # For MLX, we'll do a simpler approach that works for most cases
-    
-    # Transpose to [1, D, source_h, source_w] for processing
-    emb_2d = emb_2d.transpose(0, 3, 1, 2)
-    
-    # Use linear interpolation for each dimension separately
-    # First interpolate height
-    if source_h != target_h:
-        indices_h = mx.arange(target_h, dtype=mx.float32) * (source_h - 1) / (target_h - 1)
-        lower_h = mx.floor(indices_h).astype(mx.int32)
-        upper_h = mx.clip(lower_h + 1, 0, source_h - 1)
-        weight_h = (indices_h - lower_h.astype(mx.float32))
-        
-        emb_lower = emb_2d[:, :, lower_h, :]
-        emb_upper = emb_2d[:, :, upper_h, :]
-        emb_2d = emb_lower * (1 - weight_h)[None, None, :, None] + emb_upper * weight_h[None, None, :, None]
-    
-    # Then interpolate width
-    if source_w != target_w:
-        indices_w = mx.arange(target_w, dtype=mx.float32) * (source_w - 1) / (target_w - 1)
-        lower_w = mx.floor(indices_w).astype(mx.int32)
-        upper_w = mx.clip(lower_w + 1, 0, source_w - 1)
-        weight_w = (indices_w - lower_w.astype(mx.float32))
-        
-        emb_lower = emb_2d[:, :, :, lower_w]
-        emb_upper = emb_2d[:, :, :, upper_w]
-        emb_2d = emb_lower * (1 - weight_w)[None, None, None, :] + emb_upper * weight_w[None, None, None, :]
-    
-    # Transpose back: [1, target_h, target_w, D]
-    emb_2d = emb_2d.transpose(0, 2, 3, 1)
-    
-    # Reshape to [target_h * target_w, D]
-    target_emb = emb_2d.reshape(target_h * target_w, emb_dim)
-    
+
+    emb_grid = emb.reshape(source_h, source_w, emb_dim)
+
+    # Interpolate height with the 1D helper operating on the last axis
+    emb_grid = emb_grid.transpose(1, 2, 0)  # [W, D, H]
+    emb_grid = _interpolate_emb_1d(emb_grid, target_h)[0]  # [W, D, H']
+    emb_grid = emb_grid.transpose(2, 0, 1)  # [H', W, D]
+
+    # Interpolate width
+    emb_grid = _interpolate_emb_1d(emb_grid, target_w)[0]  # [H', W', D]
+
+    target_emb = emb_grid.reshape(target_h * target_w, emb_dim)
     return target_emb[None, :, :] if had_batch else target_emb
 
 
