@@ -19,20 +19,6 @@ and the videos themselves. VideoPrism is fairly easy to adapt to new video
 understanding tasks, and achieves state-of-the-art performance on 31 out of 33
 public video understanding benchmarks using a single frozen model.
 
-This repository releases the model weight checkpoints and hosts [JAX](https://github.com/jax-ml/jax)/[Flax](https://github.com/google/flax) utility
-functions for checkpoint loading and model inference.
-
-## Updates
-
-* **[Jul-16-25]:** Released VideoPrism video-text encoders for cross-modal retrieval [[`Colab notebook`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_text_demo.ipynb)]. :fire::fire:
-* **[Jun-15-25]:** Added models to [[`Hugging Face`](https://huggingface.co/collections/google/videoprism-686e823d6070ec6ad9e4b1f2)].
-* **[Jun-05-25]:** Added video encoder demo [[`Colab notebook`](https://colab.research.google.com/github/google-deepmind/videoprism/blob/main/videoprism/colabs/videoprism_video_encoder_demo.ipynb)].
-* **[Jun-03-25]:** Released VideoPrism video encoders (Base and Large) [[`Blog`](https://research.google/blog/videoprism-a-foundational-visual-encoder-for-video-understanding/)] [[`Paper`](https://arxiv.org/abs/2402.13217)]. :fire::fire:
-
-## TODOs
-
-- [ ] Add PyTorch model support.
-
 ## MLX Implementation (Apple Silicon)
 
 This repository includes an **MLX implementation** of VideoPrism, optimized for Apple Silicon (M1/M2/M3). The MLX version provides:
@@ -70,21 +56,8 @@ video_emb, text_emb, _ = model(video, text_ids, text_paddings)
 similarities = video_emb @ text_emb.T  # Cosine similarity
 ```
 
-**Video Classification:**
-```python
-from videoprism import models_mlx as vp
-
-# Load classifier with pre-trained encoder
-classifier = vp.load_classifier('videoprism_lvt_public_v1_base', num_classes=10)
-
-# Get logits
-logits, features = classifier(video, return_intermediate=True)
-predicted_class = mx.argmax(logits[0])
-```
-
 ### Examples
 - `test_mlx.py` - Video-text retrieval example
-- `example_classifier.py` - Classification example
 - `FLAX_TO_MLX_CONVERSION_GUIDE.md` - Detailed technical conversion guide
 
 ## Getting started
