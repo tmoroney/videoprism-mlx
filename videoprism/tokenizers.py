@@ -18,9 +18,7 @@ from collections.abc import Sequence
 from typing import Protocol, TYPE_CHECKING
 
 import sentencepiece
-
-# Import shared caching utilities
-from videoprism.utils import _cache_remote_file
+from huggingface_hub import hf_hub_download
 
 if TYPE_CHECKING:
   import tensorflow as tf
@@ -82,18 +80,24 @@ class Tokenizer(Protocol):
 class SentencePieceTokenizer(Tokenizer):
   """Wraps a SentencePiece model for tokenization."""
 
-  def __init__(self, model_path):
+  def __init__(self, model_path="c4_en.model"):
     """Initializes the tokenizer.
 
     Args:
-      model_path: A path to load the SentencePiece model.
+      model_path: Filename of the SentencePiece model to download from HuggingFace.
+                  If a GCS path is provided (gs://...), it will be ignored and the
+                  default c4_en.model will be used instead.
     """
-    local_model_path = _cache_remote_file(model_path)
-    with open(local_model_path, "rb") as f:
-      model_bytes = f.read()
-
+    # Handle legacy GCS paths by using the default model
+    if model_path.startswith("gs://"):
+      model_path = "c4_en.model"
+    
+    local_model_path = hf_hub_download(
+        repo_id="tom-moroney/videoprism-mlx",
+        filename=model_path
+    )
     self._model = SentencePieceProcessor()
-    self._model.LoadFromSerializedProto(model_bytes)
+    self._model.Load(local_model_path)
 
   def to_int(
       self, text: str | Sequence[str], *, bos: bool = False, eos: bool = False

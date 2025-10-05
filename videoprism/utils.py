@@ -23,7 +23,6 @@ import string
 import tempfile
 from urllib import parse as urlparse
 
-import fsspec
 import jax
 import numpy as np
 

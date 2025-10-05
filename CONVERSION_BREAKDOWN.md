@@ -443,7 +443,7 @@ MLX's unified memory architecture on Apple Silicon provides both speed and effic
 
 ### Potential Improvements
 
-1. **Quantization**: Implement int8/int4 quantization for faster inference
+1. **Quantization**: Implement bf16/int8/int4 quantization for faster inference
 2. **Batch processing**: Optimize for larger batch sizes
 3. **Compilation**: Investigate `@mx.compile` for frequently-called functions
 4. **Mixed precision**: Explore bfloat16 for non-critical operations
