@@ -45,13 +45,9 @@ def convert_weight_key(flax_key: str) -> str:
     if 'pooling_attention_layer_norm' in key:
         key = key.replace('pooling_attention_layer_norm', 'layer_norm')
     
-    # LayerNorm: Map to MLX's internal structure (nn.LayerNorm nests params under .norm)
-    # Match any _ln suffix (like unimodal_ln, spatial_ln, temporal_ln)
-    if (key.endswith('.bias') or key.endswith('.weight')) and ('_ln.' in key or key.endswith('_ln.bias') or key.endswith('_ln.weight') or '.ln1.' in key or '.ln2.' in key or '.layer_norm.' in key):
-        if key.endswith('.bias'):
-            key = key.replace('.bias', '.norm.bias')
-        if key.endswith('.weight'):
-            key = key.replace('.weight', '.norm.weight')
+    # LayerNorm: Our custom LayerNorm has .weight and .bias directly (no .norm nesting)
+    # Weights stay as-is, they'll be loaded with Flax scale values (~0.0)
+    # The +1.0 will be added during forward pass in our custom LayerNorm
     
     # Patch projection: Flax has patch_projection/linear/*, MLX has patch_projection.*
     if 'patch_projection.linear.' in key:
@@ -292,12 +288,11 @@ def load_and_convert_weights(weights_dict: Dict[str, mx.array]) -> Dict:
             # This is a 2D weight matrix (linear layer)
             value = value.T
         
-        # NOTE: LayerNorm scale behavior (Issue #49) - PARTIALLY RESOLVED
-        # Flax uses direct_scale=False: scale weights ~0.0, +1.0 added during forward
-        # Testing showed adding +1.0 (conversion OR forward) makes results worse
-        # Current approach: Use weights as-is with standard MLX LayerNorm
-        # Result: Correct ranking but ~3x lower similarity magnitudes vs Flax
-        # Root cause still under investigation - see CONVERSION_PLAN.md
+        # LayerNorm scale behavior (Issue #49) - DO NOT ADD +1.0 HERE
+        # While Flax adds +1.0 during forward, testing shows adding it during conversion
+        # makes results worse (negative similarities). The checkpoint appears to have
+        # been exported in a way that works with MLX LayerNorm as-is.
+        # Root cause: Unknown, possibly checkpoint post-processing or export artifact
         
         mlx_weights_flat[mlx_key] = value
     

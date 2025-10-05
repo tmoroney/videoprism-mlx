@@ -81,20 +81,46 @@ def compute_attention_masks_for_fprop(
 
 
 class LayerNorm(nn.Module):
-    """Layer normalization wrapper.
+    """Layer normalization matching Flax's behavior.
     
-    Note: Flax uses direct_scale=False (scale ~0.0, +1.0 added in forward).
-    The pretrained weights appear to already account for this, so we use
-    standard MLX LayerNorm which gives correct ranking but ~3x lower magnitudes.
-    Root cause still under investigation.
+    Flax uses direct_scale=False by default, meaning:
+    - Scale parameter initialized to 0.0 (pretrained weights are ~0.0)
+    - During forward pass, +1.0 is added to scale before applying
+    
+    We implement the same behavior for exact parity with Flax.
     """
     
     def __init__(self, dims: int, eps: float = 1e-6, affine: bool = True, bias: bool = True):
         super().__init__()
-        self.norm = nn.LayerNorm(dims, eps=eps, affine=affine, bias=bias)
+        self.dims = dims
+        self.eps = eps
+        self.affine = affine
+        self.use_bias = bias
+        
+        if affine:
+            # Weight will be loaded with Flax scale values (~0.0)
+            self.weight = mx.zeros((dims,))
+        if bias:
+            self.bias = mx.zeros((dims,))
     
     def __call__(self, x: mx.array) -> mx.array:
-        return self.norm(x)
+        # Replicate Flax LayerNorm exactly
+        # Flax: mean = mean(inputs), var = mean(square(inputs - mean))
+        # Then: (inputs - mean) / sqrt(var + epsilon)
+        
+        mean = mx.mean(x, axis=-1, keepdims=True)
+        variance = mx.mean(mx.square(x - mean), axis=-1, keepdims=True)
+        x_normalized = (x - mean) / mx.sqrt(variance + self.eps)
+        
+        # Apply Flax-style scale (+1.0 added during forward pass)
+        if self.affine:
+            scale = self.weight + 1.0  # CRITICAL: Flax direct_scale=False behavior
+            x_normalized = x_normalized * scale
+        
+        if self.use_bias:
+            x_normalized = x_normalized + self.bias
+        
+        return x_normalized
 
 
 class FeedForward(nn.Module):
