@@ -27,6 +27,21 @@ MODEL_CONFIGS = {
         'num_heads': 12,
         'atten_logit_cap': 50.0,
     },
+    'videoprism_lvt_public_v1_large': {
+        'patch_size': 18,
+        'pos_emb_shape': (8, 16, 16),
+        'num_spatial_layers': 24,
+        'num_temporal_layers': 4,
+        'mlp_dim': 4096,
+        'num_auxiliary_layers': 2,
+        'vocabulary_size': 32000,
+        'enable_causal_atten': True,
+        'num_unimodal_layers': 12,
+        'norm_policy': 'pre',
+        'model_dim': 1024,
+        'num_heads': 16,
+        'atten_logit_cap': 50.0,
+    },
 }
 
 

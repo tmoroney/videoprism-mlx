@@ -138,10 +138,14 @@ def convert_flax_to_mlx(flax_params, model_config):
     
     # Handle stacked transformer layers
     components = [
-        ('vision_encoder/spatial_encoder/transformers_stack', 12, 'spatial'),
-        ('vision_encoder/temporal_encoder/transformers_stack', 4, 'temporal'),
-        ('text_encoder/unimodal_transformer', 12, 'text'),
-        ('auxiliary_encoder/transformers_stack', 2, 'auxiliary'),
+        ('vision_encoder/spatial_encoder/transformers_stack', 
+         model_config.get('spatial_layers', 12), 'spatial'),
+        ('vision_encoder/temporal_encoder/transformers_stack', 
+         model_config.get('temporal_layers', 4), 'temporal'),
+        ('text_encoder/unimodal_transformer', 
+         model_config.get('text_layers', 12), 'text'),
+        ('auxiliary_encoder/transformers_stack', 
+         model_config.get('auxiliary_layers', 2), 'auxiliary'),
     ]
     
     print("\n  Unstacking scanned layers...")
@@ -239,10 +243,10 @@ def verify_conversion(flax_params, mlx_params, model_config):
     # Verify layer unstacking
     print(f"\nLayer verification:")
     for component_name, expected_layers in [
-        ('spatial', 12),
-        ('temporal', 4),
-        ('text', 12),
-        ('auxiliary', 2),
+        ('spatial', model_config.get('spatial_layers', 12)),
+        ('temporal', model_config.get('temporal_layers', 4)),
+        ('text', model_config.get('text_layers', 12)),
+        ('auxiliary', model_config.get('auxiliary_layers', 2)),
     ]:
         # Count layers in MLX params
         layer_keys = [k for k in mlx_params.keys() if f'{component_name}' in k.lower() and '/layers/' in k]
@@ -322,7 +326,7 @@ def main():
     
     # Load Flax model
     print("\n[1/4] Loading Flax model...")
-    model_name = 'videoprism_lvt_public_v1_base'
+    model_name = 'videoprism_lvt_public_v1_large'
     flax_model = vp.get_model(model_name)
     print(f"      ✓ Model configuration loaded")
     
@@ -340,12 +344,23 @@ def main():
     # Convert to MLX format
     print("\n[3/5] Converting to MLX format...")
     
-    model_config = {
-        'spatial_layers': 12,
-        'temporal_layers': 4,
-        'text_layers': 12,
-        'auxiliary_layers': 2,
-    }
+    # Get correct layer counts from the Flax model config
+    config_key = model_name.replace('_public', '')
+    if config_key in vp.CONFIGS:
+        flax_config = vp.CONFIGS[config_key]
+        model_config = {
+            'spatial_layers': flax_config.get('num_spatial_layers', 12),
+            'temporal_layers': flax_config.get('num_temporal_layers', 4),
+            'text_layers': flax_config.get('num_unimodal_layers', 12),
+            'auxiliary_layers': flax_config.get('num_auxiliary_layers', 2),
+        }
+        print(f"      Using config from {config_key}:")
+        print(f"        Spatial layers: {model_config['spatial_layers']}")
+        print(f"        Temporal layers: {model_config['temporal_layers']}")
+        print(f"        Text layers: {model_config['text_layers']}")
+        print(f"        Auxiliary layers: {model_config['auxiliary_layers']}")
+    else:
+        raise ValueError(f"Config not found for {model_name} (tried {config_key})")
     
     mlx_params = convert_flax_to_mlx(flax_params, model_config)
     

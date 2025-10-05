@@ -26,7 +26,7 @@ print("=" * 80)
 start = time.time()
 print("\n[1/6] Loading MLX model and weights...")
 
-model_name = 'videoprism_lvt_public_v1_base'
+model_name = 'videoprism_lvt_public_v1_large'
 try:
     model = models_mlx.load_model(model_name)
     print(f"      ✓ Model loaded in {time.time() - start:.2f}s")
