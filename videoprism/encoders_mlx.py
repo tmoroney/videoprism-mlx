@@ -365,18 +365,18 @@ class TrainablePositionalEmbedding(nn.Module):
             seq_length: Sequence length of the embeddings to be generated.
         
         Returns:
-            An array of shape [1, seq_length, embedding_dim].
+            Position embeddings of shape [1, seq_length, embedding_dim].
         """
-        position = mx.arange(seq_length, dtype=mx.int32)[None, :]
-        pos_emb_var = self.emb_var[:seq_length]  # Slice to seq_length
+        if seq_length > self.max_seq_length:
+            raise ValueError(
+                f"Sequence length {seq_length} exceeds max_seq_length {self.max_seq_length}"
+            )
         
-        if self.lookup_style == 'matmul':
-            one_hot_ids = mx.one_hot(position, seq_length)
-            embs = one_hot_ids @ pos_emb_var
-        else:
-            raise ValueError(f'Unknown lookup style: `{self.lookup_style}`.')
+        # Simple indexing to get position embeddings
+        embs = self.emb_var[:seq_length]  # [seq_length, embedding_dim]
         
-        return embs
+        # Add batch dimension
+        return embs[None, :, :]  # [1, seq_length, embedding_dim]
 
 
 class VisionTransformer(nn.Module):
@@ -492,13 +492,11 @@ class FactorizedEncoder(nn.Module):
         self.num_spatial_layers = num_spatial_layers
         self.num_temporal_layers = num_temporal_layers
         
-        # Patch projection
-        self.patch_projection = layers.FeedForward(
-            input_dim=patch_size * patch_size * 3,
-            hidden_dim=model_dim,
-            output_dim=model_dim,
-            activation_fn=lambda x: x,  # identity
-            use_bias=True,
+        # Patch projection (simple linear layer)
+        self.patch_projection = nn.Linear(
+            patch_size * patch_size * 3,  # input dim
+            model_dim,  # output dim  
+            bias=True,
         )
         
         # Spatial positional embeddings
@@ -786,6 +784,12 @@ class FactorizedVideoCLIP(nn.Module):
         model_dim: Model dimensionality (shared between vision and text).
         num_heads: Number of attention heads.
         atten_logit_cap: Attention logit capping value.
+    
+    Example:
+        >>> model = FactorizedVideoCLIP(model_dim=768, num_spatial_layers=12)
+        >>> weights = mx.load("weights/model.safetensors")
+        >>> model.load_weights(list(weights.items()))
+        >>> video_emb, text_emb, _ = model(video_input, text_ids, text_paddings)
     """
     
     def __init__(

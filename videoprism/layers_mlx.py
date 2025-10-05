@@ -476,13 +476,14 @@ class AttentionPoolingLayer(nn.Module):
         
         self.query = mx.random.normal((num_queries, query_dim))
         
+        # Match Flax: all projections go to hidden_dim, then out projects back
         self.attention = nn.MultiHeadAttention(
-            dims=query_dim,
+            dims=hidden_dim,  # All projections output hidden_dim
             num_heads=num_heads,
             query_input_dims=query_dim,
             key_input_dims=input_dim,
             value_input_dims=input_dim,
-            value_output_dims=hidden_dim,
+            value_dims=hidden_dim,  # Explicitly set value dims
             bias=use_bias,
         )
         
