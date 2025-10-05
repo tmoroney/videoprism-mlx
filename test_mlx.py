@@ -96,11 +96,24 @@ print()
 # ============================================================================
 # Compute Similarities
 # ============================================================================
-def cosine_similarity(a, b):
-    """Compute cosine similarity between two vectors."""
-    a_np = np.array(a)
-    b_np = np.array(b)
-    return np.dot(a_np, b_np) / (np.linalg.norm(a_np) * np.linalg.norm(b_np))
+def cosine_similarity(a, b, axis=-1, eps=1e-8, dtype=mx.float32):
+    """
+    Cosine similarity using MLX ops only.
+    - a, b: array-like (vectors or batches of vectors)
+    - axis: dimension along which to compute similarity (default: last)
+    - eps: small constant to avoid divide-by-zero
+    - returns: MLX array
+    """
+    x = mx.array(a, dtype=dtype)
+    y = mx.array(b, dtype=dtype)
+
+    # numerator: dot product along `axis`
+    num = mx.sum(x * y, axis=axis)
+
+    # denominator: product of L2 norms along `axis`
+    den = mx.linalg.norm(x, axis=axis) * mx.linalg.norm(y, axis=axis)
+
+    return num / mx.maximum(den, eps)
 
 # Compute similarity between video and each text query
 video_emb = video_embeddings[0]  # Shape: (768,)
