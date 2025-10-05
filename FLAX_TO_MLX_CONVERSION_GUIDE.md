@@ -43,14 +43,9 @@ FactorizedVideoCLIP
 ---
 
 ## Conversion Strategy
+Because there are no automated Flax → MLX conversion utilities, I reimplemented the model directly in MLX.
 
-### 1. Direct Implementation Approach
-Because there are no automated Flax → MLX conversion utilities, I reimplemented the model directly in MLX. This provided:
-- **Full control** over numerical behavior
-- **Clear mapping** between Flax and MLX components
-- **Easier debugging** and maintainability
-
-### 2. Layer-by-Layer Equivalence
+### Layer-by-Layer Equivalence
 Each Flax component was mapped to an equivalent MLX implementation:
 
 | Flax Component | MLX Component | Key Differences |
@@ -60,7 +55,7 @@ Each Flax component was mapped to an equivalent MLX implementation:
 | `nn.gelu` | Custom `gelu_exact` | Exact ERF-based implementation |
 | `MultiHeadAttention` | Manual Q/K/V projections | Flax-style weight layout |
 
-### 3. Weight Conversion Pipeline
+### Weight Conversion Pipeline
 ```python
 Flax Checkpoint (.msgpack)
     ↓

@@ -8,3 +8,4 @@ gcsfs
 huggingface-hub
 opencv-python
 sentencepiece
+mlx
