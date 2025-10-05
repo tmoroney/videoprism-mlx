@@ -427,7 +427,7 @@ class VisionTransformer(nn.Module):
             atten_logit_cap=atten_logit_cap,
             norm_policy=norm_policy,
             internal_enable_per_dim_scale=False,
-            activation_fn=nn.gelu,
+            activation_fn=layers.gelu_exact,
             enable_causal_atten=False,
         )
     

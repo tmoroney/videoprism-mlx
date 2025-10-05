@@ -33,6 +33,11 @@ import mlx.nn as nn
 ActivationFunc = Callable[[mx.array], mx.array]
 
 
+def gelu_exact(x: mx.array) -> mx.array:
+    """Exact GELU activation (matches Flax's approximate=False)."""
+    return 0.5 * x * (1.0 + mx.erf(x / math.sqrt(2.0)))
+
+
 def _convert_paddings_to_mask(paddings: mx.array, dtype: mx.Dtype = mx.float32) -> mx.array:
     """Converts padding indicators to additive attention mask.
     
@@ -107,19 +112,19 @@ class LayerNorm(nn.Module):
         # Replicate Flax LayerNorm exactly
         # Flax: mean = mean(inputs), var = mean(square(inputs - mean))
         # Then: (inputs - mean) / sqrt(var + epsilon)
-        
+
         mean = mx.mean(x, axis=-1, keepdims=True)
-        variance = mx.mean(mx.square(x - mean), axis=-1, keepdims=True)
+        variance = mx.var(x, axis=-1, keepdims=True)
         x_normalized = (x - mean) / mx.sqrt(variance + self.eps)
-        
+
         # Apply Flax-style scale (+1.0 added during forward pass)
         if self.affine:
             scale = self.weight + 1.0  # CRITICAL: Flax direct_scale=False behavior
             x_normalized = x_normalized * scale
-        
+
         if self.use_bias:
             x_normalized = x_normalized + self.bias
-        
+
         return x_normalized
 
 
@@ -152,17 +157,37 @@ class FeedForward(nn.Module):
 
 
 class PerDimScale(nn.Module):
-    """Per-dimension scaling layer."""
+    """Per-dimension scaling layer matching Flax's implementation.
+    
+    Flax formula: scale = r_softplus_0 / sqrt(dim) * softplus(per_dim_scale)
+    where r_softplus_0 = 1.442695041 = 1.0 / softplus(0.0)
+    """
     
     def __init__(self, dim: int, init_scale: float = 1.0):
         super().__init__()
-        self.scale = mx.full((dim,), init_scale)
+        self.dim = dim
+        # Initialize per_dim_scale parameter (will be loaded from checkpoint if available)
+        # Default init: zeros, which gives softplus(0) = 0.693... 
+        # So default scale =  1.442.../sqrt(dim) * 0.693... = 1.0/sqrt(dim)
+        self.per_dim_scale = mx.zeros((dim,))
     
     def __call__(self, x: mx.array) -> mx.array:
-        return x * self.scale
+        # Replicate Flax's PerDimScale computation using MLX's softplus
+        # r_softplus_0 = 1 / softplus(0.0)  ≈ 1 / log(2)
+        r_softplus_0 = 1.442695041
+        base_scale = r_softplus_0 / math.sqrt(self.dim)
+
+        # Use MLX functional softplus (numerically stable and matches Flax/JAX)
+        per_dim = nn.softplus(self.per_dim_scale)
+
+        # (Optional) match x's dtype to avoid dtype upcasting in low‑precision runs
+        if per_dim.dtype != x.dtype:
+            per_dim = per_dim.astype(x.dtype)
+        scale = mx.array(base_scale, dtype=x.dtype) * per_dim
+
+        return x * scale
 
 
-@mx.compile
 def _manual_attention_with_logit_cap(
     q: mx.array,
     k: mx.array,
@@ -171,24 +196,43 @@ def _manual_attention_with_logit_cap(
     logit_cap: float,
     mask: Optional[mx.array] = None,
 ) -> mx.array:
-    """Compiled manual attention with logit soft-capping.
-    
-    This function is compiled to fuse operations into optimized kernels.
+    """Manual attention with logit soft-capping.
+
+    NOTE: @mx.compile removed to avoid numerical instability from operation reordering.
     """
     # Compute attention logits
     logits = (q @ k.transpose(0, 1, 3, 2)) * scale
-    
+
     # Apply tanh soft-capping if enabled
     if logit_cap > 0.0:
         logits = logit_cap * mx.tanh(logits / logit_cap)
-    
+
     # Apply additive mask after soft-capping
     if mask is not None:
         logits = logits + mask
-    
-    # Compute attention weights and output
-    attn_weights = mx.softmax(logits.astype(mx.float32), axis=-1, precise=True).astype(logits.dtype)
-    return attn_weights @ v
+
+    logits32 = logits.astype(mx.float32)
+    mask_selector = None
+    if mask is not None:
+        mask32 = mask.astype(mx.float32)
+        min_value = mx.finfo(logits32.dtype).min
+        # Keep logits where mask is 0, set masked locations to the minimum value
+        mask_selector = mask32 >= (min_value * 0.5)
+        logits32 = mx.where(mask_selector, logits32, min_value)
+
+    max_logits = mx.max(logits32, axis=-1, keepdims=True)
+    stabilized = logits32 - max_logits
+    exp_logits = mx.exp(stabilized)
+
+    if mask_selector is not None:
+        exp_logits = exp_logits * mask_selector.astype(exp_logits.dtype)
+
+    denom = mx.sum(exp_logits, axis=-1, keepdims=True)
+    denom = mx.maximum(denom, mx.array(1e-9, dtype=denom.dtype))
+    probs = exp_logits / denom
+    probs = probs.astype(logits.dtype)
+
+    return probs @ v
 
 
 class DotProductAttention(nn.Module):
@@ -389,43 +433,51 @@ class Transformer(nn.Module):
             atten_out, _ = self.attention(normed, normed, normed, atten_mask)
             if self.residual_dropout is not None:
                 atten_out = self.residual_dropout(atten_out)
-            inputs = inputs + atten_out
+            mx.eval(atten_out)
+            inputs = mx.add(inputs, atten_out)
         elif self.norm_policy == 'post':
             atten_out, _ = self.attention(inputs, inputs, inputs, atten_mask)
             if self.residual_dropout is not None:
                 atten_out = self.residual_dropout(atten_out)
-            inputs = self.ln1(inputs + atten_out)
+            mx.eval(atten_out)
+            inputs = self.ln1(mx.add(inputs, atten_out))
         elif self.norm_policy == 'primer_hybrid':
             normed = self.ln1(inputs)
             atten_out, _ = self.attention(normed, normed, normed, atten_mask)
             atten_out = self.ln1_post(atten_out)
             if self.residual_dropout is not None:
                 atten_out = self.residual_dropout(atten_out)
-            inputs = inputs + atten_out
+            mx.eval(atten_out)
+            inputs = mx.add(inputs, atten_out)
         elif self.norm_policy == 'post_skip':
             atten_out, _ = self.attention(inputs, inputs, inputs, atten_mask)
             atten_out = self.ln1(atten_out)
             if self.residual_dropout is not None:
                 atten_out = self.residual_dropout(atten_out)
-            inputs = inputs + atten_out
-        
+            mx.eval(atten_out)
+            inputs = mx.add(inputs, atten_out)
+
         # Feed-forward block
         if self.norm_policy == 'pre':
             normed = self.ln2(inputs)
             ffn_out = self.ffn(normed)
-            inputs = inputs + ffn_out
+            mx.eval(ffn_out)
+            inputs = mx.add(inputs, ffn_out)
         elif self.norm_policy == 'post':
             ffn_out = self.ffn(inputs)
-            inputs = self.ln2(inputs + ffn_out)
+            mx.eval(ffn_out)
+            inputs = self.ln2(mx.add(inputs, ffn_out))
         elif self.norm_policy == 'primer_hybrid':
             normed = self.ln2(inputs)
             ffn_out = self.ffn(normed)
             ffn_out = self.ln2_post(ffn_out)
-            inputs = inputs + ffn_out
+            mx.eval(ffn_out)
+            inputs = mx.add(inputs, ffn_out)
         elif self.norm_policy == 'post_skip':
             ffn_out = self.ffn(inputs)
             ffn_out = self.ln2(ffn_out)
-            inputs = inputs + ffn_out
+            mx.eval(ffn_out)
+            inputs = mx.add(inputs, ffn_out)
         
         return inputs
 
@@ -505,21 +557,31 @@ class AttentionPoolingLayer(nn.Module):
         self.num_queries = num_queries
         query_dim = query_dim or input_dim
         hidden_dim = hidden_dim if hidden_dim and hidden_dim > 0 else 4 * input_dim
-        
+
         self.query = mx.random.normal((num_queries, query_dim))
-        
-        # Match Flax: all projections go to hidden_dim, then out projects back
-        self.attention = nn.MultiHeadAttention(
-            dims=hidden_dim,  # All projections output hidden_dim
-            num_heads=num_heads,
-            query_input_dims=query_dim,
-            key_input_dims=input_dim,
-            value_input_dims=input_dim,
-            value_dims=hidden_dim,  # Explicitly set value dims
-            bias=use_bias,
+        self.num_heads = num_heads
+        self.dim_per_head = hidden_dim // num_heads
+        self.use_bias = use_bias
+        self.internal_enable_per_dim_scale = internal_enable_per_dim_scale
+        self.per_dim_scale = (
+            PerDimScale(self.dim_per_head, init_scale=1.0 / math.sqrt(self.dim_per_head))
+            if internal_enable_per_dim_scale else None
         )
-        
-        self.layer_norm = LayerNorm(hidden_dim) if add_layer_norm else None
+
+        # Flax-style attention parameters (stored as [dim, num_heads, head_dim])
+        self.q_proj_w = mx.zeros((query_dim, num_heads, self.dim_per_head))
+        self.q_proj_b = mx.zeros((num_heads, self.dim_per_head)) if use_bias else None
+
+        self.k_proj_w = mx.zeros((input_dim, num_heads, self.dim_per_head))
+        self.k_proj_b = mx.zeros((num_heads, self.dim_per_head)) if use_bias else None
+
+        self.v_proj_w = mx.zeros((input_dim, num_heads, self.dim_per_head))
+        self.v_proj_b = mx.zeros((num_heads, self.dim_per_head)) if use_bias else None
+
+        self.out_proj_w = mx.zeros((query_dim, num_heads, self.dim_per_head))
+        self.out_proj_b = mx.zeros((query_dim,)) if use_bias else None
+
+        self.layer_norm = LayerNorm(query_dim) if add_layer_norm else None
         self.dropout = nn.Dropout(dropout_prob) if dropout_prob > 0.0 else None
     
     def __call__(self, tokens: mx.array, paddings: Optional[mx.array] = None) -> mx.array:
@@ -531,11 +593,39 @@ class AttentionPoolingLayer(nn.Module):
             paddings = mx.zeros((batch_size, seq_length), dtype=tokens.dtype)
         
         atten_mask = _convert_paddings_to_mask(paddings, dtype=tokens.dtype)
-        outputs = self.attention(query, tokens, tokens, mask=atten_mask)
-        
+
+        # Project queries/keys/values
+        q = mx.einsum('bqd,dhf->bqhf', query, self.q_proj_w)
+        k = mx.einsum('bsd,dhf->bshf', tokens, self.k_proj_w)
+        v = mx.einsum('bsd,dhf->bshf', tokens, self.v_proj_w)
+
+        if self.use_bias:
+            q = q + self.q_proj_b
+            k = k + self.k_proj_b
+            v = v + self.v_proj_b
+
+        q = q.transpose(0, 2, 1, 3)
+        if self.per_dim_scale is not None:
+            q = self.per_dim_scale(q)
+        k = k.transpose(0, 2, 1, 3)
+        v = v.transpose(0, 2, 1, 3)
+
+        scale = 1.0 if self.per_dim_scale is not None else 1.0 / math.sqrt(self.dim_per_head)
+        logits = mx.einsum('bhqd,bhkd->bhqk', q, k) * scale
+        logits32 = logits.astype(mx.float32)
+        if atten_mask is not None:
+            logits32 = logits32 + atten_mask.astype(mx.float32)
+        attn = mx.softmax(logits32, axis=-1, precise=True).astype(logits.dtype)
+
+        attn_out = mx.einsum('bhqk,bhkd->bhqd', attn, v)
+        attn_out = attn_out.transpose(0, 2, 1, 3)
+        outputs = mx.einsum('bqhd,mhd->bqm', attn_out, self.out_proj_w)
+        if self.use_bias:
+            outputs = outputs + self.out_proj_b
+
         if self.layer_norm is not None:
             outputs = self.layer_norm(outputs)
         if self.dropout is not None:
             outputs = self.dropout(outputs)
-        
+
         return outputs

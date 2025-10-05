@@ -33,14 +33,30 @@ def convert_weight_key(flax_key: str) -> str:
     if 'token_emb.weight' in key:
         key = key.replace('token_emb.weight', 'token_emb.emb_var')
     
-    # AttentionPooling: The learnable query parameter (not part of attention sublayer)
+    # AttentionPooling: learnable query parameter
     if 'pooling_attention_query' in key:
         key = key.replace('contrastive_vision_pooler.pooling_attention_query', 'contrastive_vision_pooler.query')
-    
-    # AttentionPooling attention sublayer: pooling_attention → attention
-    if 'contrastive_vision_pooler.pooling_attention.' in key:
-        key = key.replace('contrastive_vision_pooler.pooling_attention.', 'contrastive_vision_pooler.attention.')
-    
+
+    # AttentionPooling attention parameters (keep Flax shapes)
+    if 'contrastive_vision_pooler.pooling_attention.query.w' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.query.w', 'contrastive_vision_pooler.q_proj_w')
+    if 'contrastive_vision_pooler.pooling_attention.query.b' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.query.b', 'contrastive_vision_pooler.q_proj_b')
+    if 'contrastive_vision_pooler.pooling_attention.key.w' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.key.w', 'contrastive_vision_pooler.k_proj_w')
+    if 'contrastive_vision_pooler.pooling_attention.key.b' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.key.b', 'contrastive_vision_pooler.k_proj_b')
+    if 'contrastive_vision_pooler.pooling_attention.value.w' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.value.w', 'contrastive_vision_pooler.v_proj_w')
+    if 'contrastive_vision_pooler.pooling_attention.value.b' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.value.b', 'contrastive_vision_pooler.v_proj_b')
+    if 'contrastive_vision_pooler.pooling_attention.post.w' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.post.w', 'contrastive_vision_pooler.out_proj_w')
+    if 'contrastive_vision_pooler.pooling_attention.post.b' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.post.b', 'contrastive_vision_pooler.out_proj_b')
+    if 'contrastive_vision_pooler.pooling_attention.per_dim_scale' in key:
+        key = key.replace('contrastive_vision_pooler.pooling_attention.per_dim_scale', 'contrastive_vision_pooler.per_dim_scale')
+
     # AttentionPooling layer norm
     if 'pooling_attention_layer_norm' in key:
         key = key.replace('pooling_attention_layer_norm', 'layer_norm')
@@ -166,21 +182,17 @@ def reshape_attention_weights(weights: Dict[str, mx.array], prefix: str) -> Dict
     is_pooling = 'contrastive_vision_pooler' in prefix
     
     if is_pooling:
-        # Pooling attention: Q/K/V transpose (768→3072), out_proj no transpose (3072→768)
-        reshaped[f"{prefix}.attention.query_proj.weight"] = q_w.reshape(model_dim, total_dim).T
-        reshaped[f"{prefix}.attention.key_proj.weight"] = k_w.reshape(model_dim, total_dim).T
-        reshaped[f"{prefix}.attention.value_proj.weight"] = v_w.reshape(model_dim, total_dim).T
-        reshaped[f"{prefix}.attention.out_proj.weight"] = post_w.reshape(model_dim, total_dim)  # No transpose!
-        
-        reshaped[f"{prefix}.attention.query_proj.bias"] = q_b.reshape(total_dim)
-        reshaped[f"{prefix}.attention.key_proj.bias"] = k_b.reshape(total_dim)
-        reshaped[f"{prefix}.attention.value_proj.bias"] = v_b.reshape(total_dim)
-        reshaped[f"{prefix}.attention.out_proj.bias"] = post_b
+        # Pooling weights remain in their original layout; reshaping handled by convert_weight_key
+        return reshaped
     else:
         # Use short names for DotProductAttention
-        reshaped[f"{prefix}.attention.q_proj.weight"] = q_w.reshape(model_dim, total_dim)
-        reshaped[f"{prefix}.attention.k_proj.weight"] = k_w.reshape(model_dim, total_dim)
-        reshaped[f"{prefix}.attention.v_proj.weight"] = v_w.reshape(model_dim, total_dim)
+        # Flax format: (model_dim_in, num_heads, head_dim)
+        # MLX nn.Linear expects: (out_features, in_features)
+        # Q/K/V: transpose(1,2,0) then reshape to get correct ordering
+        reshaped[f"{prefix}.attention.q_proj.weight"] = q_w.transpose(1, 2, 0).reshape(total_dim, model_dim)
+        reshaped[f"{prefix}.attention.k_proj.weight"] = k_w.transpose(1, 2, 0).reshape(total_dim, model_dim)
+        reshaped[f"{prefix}.attention.v_proj.weight"] = v_w.transpose(1, 2, 0).reshape(total_dim, model_dim)
+        # Output projection: direct reshape since it goes (out, heads, head_dim) -> (out, total)
         reshaped[f"{prefix}.attention.out_proj.weight"] = post_w.reshape(model_dim, total_dim)
         
         reshaped[f"{prefix}.attention.q_proj.bias"] = q_b.reshape(total_dim)
@@ -279,8 +291,8 @@ def load_and_convert_weights(weights_dict: Dict[str, mx.array]) -> Dict:
         if ('.attention.query.' in mlx_key or '.attention.key.' in mlx_key or 
             '.attention.value.' in mlx_key or '.attention.post.' in mlx_key):
             continue
-        # Skip per_dim_scale (Flax-specific, not used in MLX)
-        if '.per_dim_scale' in mlx_key:
+        # Skip per_dim_scale unless needed (pooling uses it)
+        if '.per_dim_scale' in mlx_key and 'contrastive_vision_pooler' not in mlx_key:
             continue
         
         # Transpose linear layer weights: Flax uses (in, out), MLX uses (out, in)
