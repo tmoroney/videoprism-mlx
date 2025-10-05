@@ -50,7 +50,7 @@ print(f"      ✓ Video loaded in {time.time() - start:.2f}s")
 # Prepare text queries
 start = time.time()
 print("[5/6] Tokenizing text queries...")
-text_queries = ["a person walking", "a car driving", "child with 2 sticks"]
+text_queries = ["a person walking", "drumming on water bottles", "a car driving"]
 text_ids, text_paddings = vp.tokenize_texts(text_tokenizer, text_queries)
 print(f"      ✓ Text tokenized in {time.time() - start:.2f}s")
 
