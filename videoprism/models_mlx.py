@@ -6,12 +6,36 @@ in MLX format.
 
 import mlx.core as mx
 from pathlib import Path
-from .encoders_mlx import FactorizedVideoCLIP, FactorizedVideoClassifier
+from .encoders_mlx import FactorizedVideoCLIP, FactorizedVideoClassifier, FactorizedEncoder
 from .weight_utils import load_and_convert_weights
 
 
 # Model configurations
 MODEL_CONFIGS = {
+    # Video encoder backbones (vision only)
+    'videoprism_public_v1_base': {
+        'patch_size': 18,
+        'pos_emb_shape': (16, 16, 16),
+        'model_dim': 768,
+        'num_spatial_layers': 12,
+        'num_temporal_layers': 4,
+        'num_heads': 12,
+        'mlp_dim': 3072,
+        'atten_logit_cap': 50.0,
+        'norm_policy': 'pre',
+    },
+    'videoprism_public_v1_large': {
+        'patch_size': 18,
+        'pos_emb_shape': (8, 16, 16),
+        'model_dim': 1024,
+        'num_spatial_layers': 24,
+        'num_temporal_layers': 4,
+        'num_heads': 16,
+        'mlp_dim': 4096,
+        'atten_logit_cap': 50.0,
+        'norm_policy': 'pre',
+    },
+    # Video-text models (CLIP)
     'videoprism_lvt_public_v1_base': {
         'patch_size': 18,
         'pos_emb_shape': (16, 16, 16),
@@ -115,6 +139,73 @@ def load_model(model_name: str, weights_path: str = None) -> FactorizedVideoCLIP
     # Load into model
     model.update(mlx_weights)
     print(f"✓ Model loaded successfully")
+    
+    return model
+
+
+def load_video_encoder(model_name: str, weights_path: str = None) -> FactorizedEncoder:
+    """Load a pre-trained VideoPrism video encoder backbone in MLX format.
+    
+    This loads only the vision encoder (no text encoder). Useful for feature extraction
+    or when you only need video understanding without text.
+    
+    Args:
+        model_name: Name of the model configuration (e.g., 'videoprism_public_v1_base')
+        weights_path: Path to weights file (.safetensors or .npz).
+                     If None, looks in default location: weights/{model_name}_mlx.safetensors
+    
+    Returns:
+        Initialized video encoder with loaded weights
+    
+    Example:
+        >>> model = load_video_encoder('videoprism_public_v1_base')
+        >>> features, _ = model(video, return_intermediate=True)
+        >>> # features shape: [batch, num_tokens, model_dim]
+    """
+    # Get model configuration
+    config = get_model_config(model_name)
+    
+    # Check if this is a video-only model
+    if 'lvt' in model_name:
+        raise ValueError(
+            f"Model '{model_name}' is a video-text model. "
+            f"Use load_model() instead, or use a video-only model like "
+            f"'videoprism_public_v1_base' or 'videoprism_public_v1_large'"
+        )
+    
+    # Initialize encoder
+    print(f"Initializing {model_name} video encoder...")
+    model = FactorizedEncoder(**config)
+    
+    # Determine weights path
+    if weights_path is None:
+        weights_dir = Path("weights")
+        # Try safetensors first, then npz
+        weights_path = weights_dir / f"{model_name}_mlx.safetensors"
+        if not weights_path.exists():
+            weights_path = weights_dir / f"{model_name}_mlx.npz"
+    else:
+        weights_path = Path(weights_path)
+    
+    # Load weights
+    if not weights_path.exists():
+        raise FileNotFoundError(
+            f"Weights not found at {weights_path}. "
+            f"Please run: python convert_weights.py"
+        )
+    
+    print(f"Loading weights from {weights_path}...")
+    if str(weights_path).endswith('.safetensors'):
+        weights = mx.load(str(weights_path))
+    else:
+        weights = dict(mx.load(str(weights_path)))
+    
+    print(f"Converting weights to MLX format...")
+    mlx_weights = load_and_convert_weights(weights)
+    
+    # Load into model
+    model.update(mlx_weights)
+    print(f"✓ Video encoder loaded successfully")
     
     return model
 

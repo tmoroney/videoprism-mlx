@@ -104,12 +104,13 @@ def rename_parameter(flax_name):
     return name
 
 
-def convert_flax_to_mlx(flax_params, model_config):
+def convert_flax_to_mlx(flax_params, model_config, model_name):
     """Convert complete Flax parameter tree to MLX format.
     
     Args:
         flax_params: Flax parameters (nested dict or FrozenDict)
         model_config: Model configuration dict with layer counts
+        model_name: Name of the model being converted
     
     Returns:
         MLX-formatted parameter dictionary
@@ -134,16 +135,30 @@ def convert_flax_to_mlx(flax_params, model_config):
     mlx_params = {}
     
     # Handle stacked transformer layers
+    # Path prefix differs between video-only and video-text models
+    # Check if this is a video-only model (no 'lvt' in model name) or CLIP model
+    is_video_only = 'lvt' not in model_name
+    vision_prefix = '' if is_video_only else 'vision_encoder/'
+    
+    # Always present: vision encoder (spatial + temporal)
     components = [
-        ('vision_encoder/spatial_encoder/transformers_stack', 
+        (f'{vision_prefix}spatial_encoder/transformers_stack', 
          model_config.get('spatial_layers', 12), 'spatial'),
-        ('vision_encoder/temporal_encoder/transformers_stack', 
+        (f'{vision_prefix}temporal_encoder/transformers_stack', 
          model_config.get('temporal_layers', 4), 'temporal'),
-        ('text_encoder/unimodal_transformer', 
-         model_config.get('text_layers', 12), 'text'),
-        ('auxiliary_encoder/transformers_stack', 
-         model_config.get('auxiliary_layers', 2), 'auxiliary'),
     ]
+    
+    # Optional: text and auxiliary encoders (only for video-text models)
+    if 'text_layers' in model_config:
+        components.append(
+            ('text_encoder/unimodal_transformer', 
+             model_config.get('text_layers', 12), 'text')
+        )
+    if 'auxiliary_layers' in model_config:
+        components.append(
+            ('auxiliary_encoder/transformers_stack', 
+             model_config.get('auxiliary_layers', 2), 'auxiliary')
+        )
     
     print("\n  Unstacking scanned layers...")
     
@@ -239,12 +254,18 @@ def verify_conversion(flax_params, mlx_params, model_config):
     
     # Verify layer unstacking
     print(f"\nLayer verification:")
-    for component_name, expected_layers in [
+    
+    # Build verification list based on what's in model_config
+    verification_list = [
         ('spatial', model_config.get('spatial_layers', 12)),
         ('temporal', model_config.get('temporal_layers', 4)),
-        ('text', model_config.get('text_layers', 12)),
-        ('auxiliary', model_config.get('auxiliary_layers', 2)),
-    ]:
+    ]
+    if 'text_layers' in model_config:
+        verification_list.append(('text', model_config.get('text_layers', 12)))
+    if 'auxiliary_layers' in model_config:
+        verification_list.append(('auxiliary', model_config.get('auxiliary_layers', 2)))
+    
+    for component_name, expected_layers in verification_list:
         # Count layers in MLX params
         layer_keys = [k for k in mlx_params.keys() if f'{component_name}' in k.lower() and '/layers/' in k]
         unique_layers = set()
@@ -321,6 +342,12 @@ def main():
     print("VideoPrism Flax → MLX Weight Conversion")
     print("=" * 80)
     
+    # Configure which model to convert
+    # Options:
+    #   - 'videoprism_public_v1_base' (video encoder only)
+    #   - 'videoprism_public_v1_large' (video encoder only)
+    #   - 'videoprism_lvt_public_v1_base' (video-text CLIP)
+    #   - 'videoprism_lvt_public_v1_large' (video-text CLIP)
     model_name = 'videoprism_lvt_public_v1_large'
     
     # Load Flax weights
@@ -341,21 +368,31 @@ def main():
     config_key = model_name.replace('_public', '')
     if config_key in vp.CONFIGS:
         flax_config = vp.CONFIGS[config_key]
+        
+        # Build model config based on what's present (video-only vs video-text models)
+        is_video_only = 'lvt' not in model_name
+        
         model_config = {
             'spatial_layers': flax_config.get('num_spatial_layers', 12),
             'temporal_layers': flax_config.get('num_temporal_layers', 4),
-            'text_layers': flax_config.get('num_unimodal_layers', 12),
-            'auxiliary_layers': flax_config.get('num_auxiliary_layers', 2),
         }
+        
+        # Only add text/auxiliary layers if this is a video-text model
+        if not is_video_only:
+            model_config['text_layers'] = flax_config.get('num_unimodal_layers', 12)
+            model_config['auxiliary_layers'] = flax_config.get('num_auxiliary_layers', 2)
+        
         print(f"      Using config from {config_key}:")
+        print(f"        Model type: {'Video encoder only' if is_video_only else 'Video-text CLIP'}")
         print(f"        Spatial layers: {model_config['spatial_layers']}")
         print(f"        Temporal layers: {model_config['temporal_layers']}")
-        print(f"        Text layers: {model_config['text_layers']}")
-        print(f"        Auxiliary layers: {model_config['auxiliary_layers']}")
+        if not is_video_only:
+            print(f"        Text layers: {model_config['text_layers']}")
+            print(f"        Auxiliary layers: {model_config['auxiliary_layers']}")
     else:
         raise ValueError(f"Config not found for {model_name} (tried {config_key})")
     
-    mlx_params = convert_flax_to_mlx(flax_params, model_config)
+    mlx_params = convert_flax_to_mlx(flax_params, model_config, model_name)
     
     # Verify conversion
     print("\n[3/4] Verifying conversion...")

@@ -296,8 +296,14 @@ def load_and_convert_weights(weights_dict: Dict[str, mx.array]) -> Dict:
             continue
         
         # Transpose linear layer weights: Flax uses (in, out), MLX uses (out, in)
-        if mlx_key.endswith('.weight') and len(value.shape) == 2:
-            # This is a 2D weight matrix (linear layer)
+        # BUT skip attention projection weights - they're already transposed in reshape_attention_weights
+        is_attention_weight = ('.attention.q_proj.weight' in mlx_key or 
+                              '.attention.k_proj.weight' in mlx_key or
+                              '.attention.v_proj.weight' in mlx_key or
+                              '.attention.out_proj.weight' in mlx_key)
+        
+        if mlx_key.endswith('.weight') and len(value.shape) == 2 and not is_attention_weight:
+            # This is a 2D weight matrix (linear layer) that needs transpose
             value = value.T
         
         # LayerNorm scale behavior (Issue #49) - DO NOT ADD +1.0 HERE

@@ -25,7 +25,16 @@ This repository includes an **MLX implementation** of VideoPrism, optimized for 
 - ✅ **3-7x faster inference** on Mac compared to JAX/CPU
 - ✅ **Numerically identical outputs** to the original Flax implementation
 - ✅ **Lower memory usage** with unified memory architecture
-- ✅ **Two model variants**: Video-text contrastive (CLIP) and video classifier
+- ✅ **Multiple model variants**: Video encoders, video-text CLIP, and video classifiers
+
+### Available Models
+
+| Model Name | Type | Parameters | Use Case |
+|------------|------|------------|----------|
+| `videoprism_public_v1_base` | Video encoder | 114M | Feature extraction, embeddings |
+| `videoprism_public_v1_large` | Video encoder | 354M | Feature extraction, embeddings |
+| `videoprism_lvt_public_v1_base` | Video-text CLIP | 248M | Cross-modal retrieval |
+| `videoprism_lvt_public_v1_large` | Video-text CLIP | 580M | Cross-modal retrieval |
 
 ### Installation
 
@@ -35,12 +44,28 @@ pip install mlx  # Apple Silicon required
 
 ### Quick Start (MLX)
 
+**Video Feature Extraction:**
+```python
+import mlx.core as mx
+from videoprism import models_mlx as vp
+
+# Load video encoder
+model = vp.load_video_encoder('videoprism_public_v1_base')
+
+# Extract features
+video = mx.array(...)  # [1, 16, 288, 288, 3]
+features, _ = model(video)  # [1, 4096, 768]
+
+# Reshape to spatiotemporal: (B, T, H, W, D)
+features = features.reshape(1, 16, 16, 16, 768)
+```
+
 **Video-Text Retrieval:**
 ```python
 import mlx.core as mx
 from videoprism import models_mlx as vp
 
-# Load model
+# Load video-text model
 model = vp.load_model('videoprism_lvt_public_v1_base')
 tokenizer = vp.load_text_tokenizer('c4_en')
 
@@ -56,7 +81,20 @@ video_emb, text_emb, _ = model(video, text_ids, text_paddings)
 similarities = video_emb @ text_emb.T  # Cosine similarity
 ```
 
+**Video Classification (Fine-tuning):**
+```python
+from videoprism import models_mlx as vp
+
+# Load classifier with pre-trained encoder
+classifier = vp.load_classifier('videoprism_lvt_public_v1_base', num_classes=10)
+
+# Get logits
+logits, features = classifier(video, return_intermediate=True)
+predicted_class = mx.argmax(logits[0])
+```
+
 ### Examples
+- `test_video_encoder.py` - Video feature extraction example
 - `test_mlx.py` - Video-text retrieval example
 - `FLAX_TO_MLX_CONVERSION_GUIDE.md` - Detailed technical conversion guide
 
