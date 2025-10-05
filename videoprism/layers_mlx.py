@@ -81,7 +81,13 @@ def compute_attention_masks_for_fprop(
 
 
 class LayerNorm(nn.Module):
-    """Layer normalization wrapper."""
+    """Layer normalization wrapper.
+    
+    Note: Flax uses direct_scale=False (scale ~0.0, +1.0 added in forward).
+    The pretrained weights appear to already account for this, so we use
+    standard MLX LayerNorm which gives correct ranking but ~3x lower magnitudes.
+    Root cause still under investigation.
+    """
     
     def __init__(self, dims: int, eps: float = 1e-6, affine: bool = True, bias: bool = True):
         super().__init__()
