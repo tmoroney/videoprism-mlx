@@ -40,16 +40,15 @@ FactorizedVideoCLIP
 - **Attention Logit Cap**: 50.0 (tanh soft-capping)
 - **Normalization**: Pre-LN (LayerNorm before attention/FFN)
 - **Activation**: GELU (exact, not approximate)
-
 ---
 
 ## Conversion Strategy
 
 ### 1. Direct Implementation Approach
-Rather than using automated conversion tools, we reimplemented the model architecture in MLX to maintain:
-- Full control over numerical behavior
-- Clear mapping between Flax and MLX components
-- Debuggability and maintainability
+Because there are no automated Flax → MLX conversion utilities, I reimplemented the model directly in MLX. This provided:
+- **Full control** over numerical behavior
+- **Clear mapping** between Flax and MLX components
+- **Easier debugging** and maintainability
 
 ### 2. Layer-by-Layer Equivalence
 Each Flax component was mapped to an equivalent MLX implementation:
@@ -388,22 +387,46 @@ python debugging/find_divergence.py
 
 ## Performance Notes
 
-### Speed Comparison (M1 Pro, 16 frames)
+Note that the performance numbers are specific to Apple Silicon hardware and may not be representative of other hardware configurations.
+
+### Speed Comparison (16-frame clip, single batch)
+
+Measured on this machine with the provided inference scripts. Each timing
+excludes model/tokenizer loading and averages multiple warm-started forward
+passes.
 
 ```
-Flax/JAX (CPU):  ~850ms per forward pass
-MLX (GPU):       ~120ms per forward pass
-Speedup:         ~7x faster
+Flax/JAX (CPU, 10 runs):   4.54 s ± 0.15 s per pass
+MLX (GPU, 20 runs):        1.42 s ± 0.04 s per pass
+Observed speedup:          ≈3.2× faster
 ```
 
-### Memory Usage
+### Memory Usage (peak resident set size)
+
+Measured with `resource.getrusage(RUSAGE_SELF).ru_maxrss` after one warm
+forward pass in a fresh process.
 
 ```
-Flax/JAX:  ~2.1 GB
-MLX:       ~1.8 GB
+Flax/JAX:  5.26 GB
+MLX:       1.17 GB
 ```
 
-MLX's unified memory architecture on Apple Silicon provides both speed and efficiency benefits.
+#### Benchmark methodology
+
+- Hardware: 14" MacBook Pro (Apple M3 Pro; unified-memory capacity per local configuration).
+- Commands:
+  - `python benchmark_performance.py --framework flax --runs 10 --warmup 2`
+  - `python benchmark_performance.py --framework mlx --runs 20 --warmup 3`
+- Video clip: `videoprism/assets/water_bottle_drumming.mp4`, 16 frames @ 288×288.
+- Tokenizer: `c4_en`; text prompts: `"a person walking"`, `"drumming on water bottles"`, `"a car driving"` (default in the script).
+- Results above are the script output (mean/std/min/max) with embeddings left unnormalized during timing to avoid unnecessary work.
+
+The helper script `benchmark_performance.py` is checked into the repository so
+that new measurements can be reproduced or captured on different hardware. Run
+`python benchmark_performance.py --help` for the full set of options (batch
+size, clip length, number of runs, etc.).
+
+MLX's unified memory architecture on Apple Silicon provides both speed and efficiency benefits compared to Flax/JAX (CPU only).
 
 ---
 
@@ -415,12 +438,6 @@ MLX's unified memory architecture on Apple Silicon provides both speed and effic
 2. **Batch processing**: Optimize for larger batch sizes
 3. **Compilation**: Investigate `@mx.compile` for frequently-called functions
 4. **Mixed precision**: Explore bfloat16 for non-critical operations
-
-### Known Limitations
-
-- Currently single-device only (no distributed training)
-- Requires macOS with Apple Silicon
-- Checkpoint conversion is one-way (MLX → Flax not implemented)
 
 ---
 
@@ -443,7 +460,3 @@ This conversion was made possible by:
 **License**: Same as original VideoPrism (Apache 2.0)
 
 **Maintainer**: See repository for contact information
-
----
-
-*Last updated: 2025-10-05*
