@@ -7,14 +7,11 @@ This script handles:
 4. Saving in MLX-compatible format
 """
 
-import jax
 import numpy as np
 import mlx.core as mx
 from videoprism import models as vp
 from flax.traverse_util import flatten_dict
 from pathlib import Path
-import pickle
-
 
 def unstack_scan_layers(params_dict, prefix, num_layers):
     """Unstack scanned layers into individual layer dicts.
@@ -324,14 +321,10 @@ def main():
     print("VideoPrism Flax → MLX Weight Conversion")
     print("=" * 80)
     
-    # Load Flax model
-    print("\n[1/4] Loading Flax model...")
     model_name = 'videoprism_lvt_public_v1_large'
-    flax_model = vp.get_model(model_name)
-    print(f"      ✓ Model configuration loaded")
     
     # Load Flax weights
-    print("\n[2/4] Loading Flax weights...")
+    print("\n[1/4] Loading Flax weights...")
     loaded_state = vp.load_pretrained_weights(model_name)
     
     if 'params' in loaded_state:
@@ -342,7 +335,7 @@ def main():
     print(f"      ✓ Weights loaded")
     
     # Convert to MLX format
-    print("\n[3/5] Converting to MLX format...")
+    print("\n[2/4] Converting to MLX format...")
     
     # Get correct layer counts from the Flax model config
     config_key = model_name.replace('_public', '')
@@ -365,11 +358,11 @@ def main():
     mlx_params = convert_flax_to_mlx(flax_params, model_config)
     
     # Verify conversion
-    print("\n[4/5] Verifying conversion...")
+    print("\n[3/4] Verifying conversion...")
     verify_conversion(flax_params, mlx_params, model_config)
     
     # Save MLX weights
-    print("\n[5/5] Saving MLX weights...")
+    print("\n[4/4] Saving MLX weights...")
     output_dir = Path("weights")
     output_path = output_dir / f"{model_name}_mlx.npz"
     save_mlx_weights(mlx_params, output_path)
