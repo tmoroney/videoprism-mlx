@@ -604,7 +604,9 @@ class FactorizedEncoder(nn.Module):
         
         # Add temporal positional encoding
         temporal_pos_emb = self.temporal_pos_emb(self.temporal_seq_length)  # [1, L, D]
-        if self.temporal_seq_length != t:
+        if t == 1:
+            temporal_pos_emb = temporal_pos_emb[:, :1, :]
+        elif self.temporal_seq_length != t:
             temporal_pos_emb = _interpolate_emb_1d(temporal_pos_emb, t)
         features = features + temporal_pos_emb  # [B*N, T, D]
         
